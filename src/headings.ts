@@ -86,18 +86,39 @@ export function parseHeadings(body: string): EditorHeading[] {
 			continue;
 		}
 
-		// TODO: This parser is ATX-only (`# Heading`). Setext headings (a line of text underlined by
-		// === or ---) are deliberately not detected in the smoke build and must be added together with
-		// the real minimap, alongside the matching editor-side rendering.
+		// ATX headings: `# Heading` … `###### Heading`.
 		const line = rawLine.trim().replace(/\s+#*$/, '');
-		const match = line.match(/^(#{1,6})\s+(.*?)\s*$/);
-		if (!match) continue;
+		const atxMatch = line.match(/^(#{1,6})\s+(.*?)\s*$/);
+		if (atxMatch) {
+			const level = atxMatch[1].length;
+			const text = (atxMatch[2] ?? '').trim();
+			if (!text) continue;
+			headings.push({ level, text, line: index, slug: slugFor(text, seen) });
+			continue;
+		}
 
-		const level = match[1].length;
-		const text = (match[2] ?? '').trim();
-		if (!text) continue;
-
-		headings.push({ level, text, line: index, slug: slugFor(text, seen) });
+		// Setext headings: a line of text underlined by === (H1) or --- (H2). We detect them when we
+		// reach the underline line and look back at the text line above it. The text line was already
+		// visited on the previous iteration and skipped (it is not ATX), so there is no double count.
+		//
+		// Guards keep an ordinary `---` (thematic break) or a paragraph's last line from being misread
+		// as a heading: the underline must be a run of only = or -, the text line must be a plain
+		// paragraph line (non-blank, not ATX, not a list/blockquote/table/fence marker), and the line
+		// ABOVE the text line must be blank or the start of the document (a heading stands alone).
+		const underline = rawLine.match(/^\s{0,3}(=+|-+)\s*$/);
+		if (underline && index > 0) {
+			const textLineRaw = lines[index - 1];
+			const textLine = textLineRaw.trim();
+			const aboveBlank = index - 2 < 0 || lines[index - 2].trim() === '';
+			const looksLikeBlock = /^(#|>|\||[-*+]\s|\d+[.)]\s)/.test(textLine);
+			if (textLine !== '' && !looksLikeBlock && aboveBlank) {
+				const level = underline[1][0] === '=' ? 1 : 2;
+				const cleaned = textLine.replace(/\s+#*$/, '').trim();
+				if (cleaned) {
+					headings.push({ level, text: cleaned, line: index - 1, slug: slugFor(cleaned, seen) });
+				}
+			}
+		}
 	}
 
 	return headings;
