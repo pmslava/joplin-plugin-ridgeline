@@ -86,15 +86,21 @@ export function parseHeadings(body: string): EditorHeading[] {
 			continue;
 		}
 
-		// ATX headings: `# Heading` … `###### Heading`.
-		const line = rawLine.trim().replace(/\s+#*$/, '');
-		const atxMatch = line.match(/^(#{1,6})\s+(.*?)\s*$/);
-		if (atxMatch) {
-			const level = atxMatch[1].length;
-			const text = (atxMatch[2] ?? '').trim();
-			if (!text) continue;
-			headings.push({ level, text, line: index, slug: slugFor(text, seen) });
-			continue;
+		// ATX headings: `# Heading` … `###### Heading`. CommonMark allows only 0-3 spaces of leading
+		// indent; a line indented by 4+ spaces (or a leading tab) is an indented code block, which
+		// Joplin renders as <code> — not a heading. Matching the RAW line's indent (instead of
+		// trimming all leading whitespace) keeps the editor list in sync with the viewer's rendered
+		// h1-h6 on realistic technical notes (e.g. a `    # note` code sample). CommonMark §4.2/§4.4.
+		if (/^ {0,3}#/.test(rawLine)) {
+			const line = rawLine.replace(/^\s+/, '').replace(/\s+#*$/, '');
+			const atxMatch = line.match(/^(#{1,6})\s+(.*?)\s*$/);
+			if (atxMatch) {
+				const level = atxMatch[1].length;
+				const text = (atxMatch[2] ?? '').trim();
+				if (!text) continue;
+				headings.push({ level, text, line: index, slug: slugFor(text, seen) });
+				continue;
+			}
 		}
 
 		// Setext headings: a line of text underlined by === (H1) or --- (H2). We detect them when we

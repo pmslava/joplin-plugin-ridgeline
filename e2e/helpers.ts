@@ -63,9 +63,11 @@ export function buildMixedNoteBody(fillerPerSection = 6): string {
 }
 
 /**
- * A note mixing setext headings (=== / ---), ATX headings, and a fenced code block that CONTAINS a
- * line that looks like an ATX heading. The editor parser and the rendered viewer must agree on the
- * heading count: 4 real headings, the fenced `# Not A Heading` ignored.
+ * A note mixing setext headings (=== / ---), ATX headings, a fenced code block that CONTAINS a line
+ * that looks like an ATX heading, AND an indented (4-space) code block whose line also looks like an
+ * ATX heading. The editor parser and the rendered viewer must agree on the heading count: 4 real
+ * headings, the fenced `# Not A Heading` and the indented `# Indented Not A Heading` both ignored
+ * (CommonMark: 4+ leading spaces = indented code block, which Joplin renders as <code>, not <h*>).
  */
 export const SETEXT_REAL_HEADING_COUNT = 4;
 export function buildSetextNoteBody(): string {
@@ -92,6 +94,13 @@ export function buildSetextNoteBody(): string {
     '## Another ATX Heading',
     '',
     ...Array.from({ length: 80 }, (_, n) => `Trailing line ${n + 1}.`),
+    '',
+    // Indented code block (4 spaces) whose line looks like an ATX heading but must NOT be parsed as
+    // one. Placed LAST so CodeMirror's auto-indent (which carries the 4-space indent onto the next
+    // typed line) cannot contaminate any real heading above it.
+    'Finally, an indented code block whose line must NOT be parsed as a heading:',
+    '',
+    '    # Indented Not A Heading',
   ].join('\n');
 }
 
