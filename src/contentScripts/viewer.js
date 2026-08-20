@@ -30,10 +30,13 @@
 		// console.info.apply(console, ['[ridgeline-viewer]'].concat([].slice.call(arguments)));
 	}
 
-	function getScrollTop() {
-		return window.pageYOffset ||
-			(document.documentElement && document.documentElement.scrollTop) ||
-			(document.body && document.body.scrollTop) || 0;
+	// Width of the viewport's vertical scrollbar, so a right-side (position:fixed) strip can be tucked
+	// just inside it instead of overlapping it — mirrors the editor strip's scrollbar offset.
+	function verticalScrollbarWidth() {
+		var el = document.scrollingElement || document.documentElement;
+		if (!el) return 0;
+		var w = (el.offsetWidth || 0) - (el.clientWidth || 0);
+		return w > 0 ? w : 0;
 	}
 
 	function headingElements() {
@@ -109,7 +112,7 @@
 		strip.style.zIndex = '2147483000';
 		strip.style.cursor = 'pointer';
 		if (settings.side === 'right') {
-			strip.style.right = '0';
+			strip.style.right = verticalScrollbarWidth() + 'px';
 			strip.style.left = '';
 		} else {
 			strip.style.left = '0';
