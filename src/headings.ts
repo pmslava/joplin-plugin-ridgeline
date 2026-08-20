@@ -53,7 +53,10 @@ export function parseHeadings(body: string): EditorHeading[] {
 	const seen = new Map<string, number>();
 	const lines = body.split('\n');
 
-	let inFence = false;
+	// Tracks the marker (``` or ~~~) that opened the current fenced block, or null when outside a
+	// fence. A fence can only be closed by its own marker type, so a ~~~ line inside a ``` block is
+	// treated as content — not as a fence toggle.
+	let fenceMarker: string | null = null;
 	let inComment = false;
 
 	for (let index = 0; index < lines.length; index++) {
@@ -62,10 +65,16 @@ export function parseHeadings(body: string): EditorHeading[] {
 		// Toggle fenced code blocks (``` or ~~~), but not a single-line inline `code`.
 		const fenceMatch = rawLine.match(/^\s{0,3}(```|~~~)/);
 		if (fenceMatch && !/^\s{0,3}(```|~~~).*\1/.test(rawLine)) {
-			inFence = !inFence;
+			const marker = fenceMatch[1];
+			if (fenceMarker === null) {
+				fenceMarker = marker; // opening a fence
+			} else if (fenceMarker === marker) {
+				fenceMarker = null; // closing the matching fence
+			}
+			// A non-matching marker inside an open fence is content — leave the fence state alone.
 			continue;
 		}
-		if (inFence) continue;
+		if (fenceMarker !== null) continue;
 
 		// Toggle HTML comment blocks.
 		if (/<!--/.test(rawLine) && !/-->/.test(rawLine)) {
@@ -77,6 +86,9 @@ export function parseHeadings(body: string): EditorHeading[] {
 			continue;
 		}
 
+		// TODO: This parser is ATX-only (`# Heading`). Setext headings (a line of text underlined by
+		// === or ---) are deliberately not detected in the smoke build and must be added together with
+		// the real minimap, alongside the matching editor-side rendering.
 		const line = rawLine.trim().replace(/\s+#*$/, '');
 		const match = line.match(/^(#{1,6})\s+(.*?)\s*$/);
 		if (!match) continue;
