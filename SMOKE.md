@@ -1,4 +1,4 @@
-# Ridgeline — manual checklist (Phase 2, v0.2.0)
+# Ridgeline — manual checklist (Phase 2, v0.2.1)
 
 Ridgeline draws a **compact minimap** at one edge of the Markdown editor and the rendered viewer: a
 vertical stack of thin horizontal bars, one per heading, where **bar length encodes heading level**
@@ -50,6 +50,35 @@ Use a note with several headings (mix of `#`…`######`) and enough text to scro
       fenced code block is correctly ignored).
 - [ ] **Multi-window.** With the note selected, press **Ctrl+Alt+N** (Note → *Open note in new
       window*). The minimap appears in the **new window** too and tracks its own scroll independently.
+
+## Round-1 fixes (v0.2.1) — re-check these
+
+These are the eight issues from the first real-desktop test round. Re-verify each on Joplin 3.7.x
+with the Markdown editor's **inline rendering ON** (Settings → Editor → *Render markup in editor*),
+dark theme, on a note with a mix of `#`…`######` headings and at least one **very long** heading.
+
+- [ ] **R1 — Top anchor.** The bar stack sits near the **top** of the pane (small top offset), not
+      floating in the vertical centre.
+- [ ] **R2 — Right-aligned bars.** Bars are flush to the strip's **right edge** with ragged left
+      ends, on **both** the left and right side (Ctrl+Alt+R to flip and confirm).
+- [ ] **R3 — Current bar stands out.** The current-section bar is clearly **thicker + brighter**
+      (and a touch longer) than the others — "where am I" is obvious at a glance.
+- [ ] **R4 — Panel overlays, no truncation.** Hovering opens the TOC **over** the strip, anchored at
+      the pane edge (the strip is covered, not left beside the panel). The **long heading is not cut
+      off with an ellipsis** — it wraps; the panel is only as wide as the longest row, capped at a
+      sane fraction of the pane.
+- [ ] **R5 — Row affordance.** Hovering a TOC row **changes its background** and the cursor is a
+      **pointer**.
+- [ ] **R6 — Trigger zone.** Hovering the empty edge band **below** the bars does **not** open the
+      TOC (and does not block selecting text there); only hovering the **bars** opens it.
+- [ ] **R7 — Selection drag.** While **selecting text** (mouse button held), drag the pointer onto
+      the bars — the TOC still **opens**.
+- [ ] **R8 — Heading indentation (regression).** With the plugin active, heading lines keep their
+      text **aligned with body text** — no progressive left shift by level, in every combination of
+      side (left/right) × mode (overlay/reserve), for both existing and freshly typed headings, in the
+      main **and** secondary windows. (In a clean profile this was verified to already hold; if you
+      still see a shift, it points to a local **userchrome.css** rule or another editor plugin — see
+      the round-1 report.)
 
 ## Notes
 
