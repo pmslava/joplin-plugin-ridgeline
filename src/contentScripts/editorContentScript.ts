@@ -54,6 +54,7 @@ class EditorStrip {
 	private activeIndex = -1;
 	private rafPending = false;
 	private readonly onScroll: () => void;
+	private readonly onResize: () => void;
 	// Content scripts run in the main renderer's JS realm, so the global `document`/`window` are the
 	// main window's even for a secondary-window editor. Build the strip in the editor's OWN document
 	// (S8) — otherwise a secondary window would get no strip (or one adopted into the wrong doc).
@@ -85,6 +86,29 @@ class EditorStrip {
 
 		this.onScroll = () => this.scheduleUpdate();
 		this.view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
+
+		// The scrollbar width can change after construction (e.g. content grows past the viewport, or
+		// the window is resized), which shifts where a right-side strip must sit. Re-measure on resize
+		// (and, cheaply, on every update()) rather than trusting the one-shot construction measurement.
+		this.onResize = () => this.refreshSidePosition();
+		this.ownerWin.addEventListener('resize', this.onResize, { passive: true });
+	}
+
+	private measureScrollbarWidth(): number {
+		return Math.max(0, this.view.scrollDOM.offsetWidth - this.view.scrollDOM.clientWidth);
+	}
+
+	// Re-apply the edge offset. For a right-side strip this depends on the live scrollbar width, so it
+	// must be recomputed whenever the editor geometry changes — not cached at construction.
+	private refreshSidePosition(): void {
+		const s = this.container.style;
+		if (this.settings.side === 'right') {
+			s.right = `${this.measureScrollbarWidth()}px`;
+			s.left = '';
+		} else {
+			s.left = '0';
+			s.right = '';
+		}
 	}
 
 	private applyBaseStyle(): void {
@@ -100,14 +124,7 @@ class EditorStrip {
 		s.cursor = 'pointer';
 		s.overflow = 'visible';
 
-		const scrollbarWidth = this.view.scrollDOM.offsetWidth - this.view.scrollDOM.clientWidth;
-		if (this.settings.side === 'right') {
-			s.right = `${Math.max(0, scrollbarWidth)}px`;
-			s.left = '';
-		} else {
-			s.left = '0';
-			s.right = '';
-		}
+		this.refreshSidePosition();
 
 		const label = this.label.style;
 		label.position = 'absolute';
@@ -217,6 +234,10 @@ class EditorStrip {
 	}
 
 	public update(): void {
+		// Geometry may have shifted (content grew, viewport resized) — keep a right-side strip pinned
+		// just inside the live scrollbar.
+		this.refreshSidePosition();
+
 		const active = this.computeActiveIndex();
 		this.activeIndex = active;
 
@@ -239,6 +260,7 @@ class EditorStrip {
 
 	public destroy(): void {
 		this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
+		this.ownerWin.removeEventListener('resize', this.onResize);
 		this.container.remove();
 	}
 }
@@ -265,6 +287,11 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 
 		const reserveCompartment = new Compartment();
 		let strip: EditorStrip | null = null;
+		// Set the instant the lifecycle plugin is destroyed. The settings round-trip below is async and
+		// cannot be cancelled, so if the EditorView is torn down mid-flight we must NOT mount a strip
+		// into the now-detached DOM (it would leave a scroll/resize listener nothing tears down). This
+		// matters more once the real minimap hangs observers off this same block.
+		let destroyed = false;
 
 		const rebuildHeadings = () => {
 			if (!strip) return;
@@ -285,6 +312,7 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		const lifecycle = ViewPlugin.fromClass(
 			class {
 				public destroy() {
+					destroyed = true;
 					strip?.destroy();
 					strip = null;
 				}
@@ -301,6 +329,12 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 				console.warn('[ridgeline] could not fetch settings, using defaults', error);
 			}
 
+			// The view may have been destroyed while the settings request was in flight. Bail before
+			// dispatching or mounting anything — dispatching on a destroyed view can throw, and a strip
+			// mounted now would attach to detached DOM with listeners the destroyed lifecycle can no
+			// longer clean up.
+			if (destroyed || !view.dom.isConnected) return;
+
 			const side: Side = settings.side === 'right' ? 'right' : 'left';
 			const editorMode: PaneMode = settings.editorMode === 'reserve' ? 'reserve' : 'overlay';
 			const resolved: RidgelineSettings = { ...settings, side, editorMode };
@@ -310,9 +344,16 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 				effects: reserveCompartment.reconfigure(reserveTheme(resolved)),
 			});
 
-			strip = new EditorStrip(view, resolved, (heading) => {
+			const newStrip = new EditorStrip(view, resolved, (heading) => {
 				void context.postMessage({ type: 'jump', anchor: heading.slug, line: heading.line });
 			});
+			// Guard once more: if destroy() ran between the check above and mounting, tear the fresh
+			// strip down immediately so it does not outlive the view.
+			if (destroyed || !view.dom.isConnected) {
+				newStrip.destroy();
+				return;
+			}
+			strip = newStrip;
 			rebuildHeadings();
 		})();
 
