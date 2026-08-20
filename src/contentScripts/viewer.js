@@ -20,13 +20,14 @@
 	// Fallback only — the real tokens arrive from the coordinator (settings.tokens). Kept in sync with
 	// src/tokens.ts so a failed round-trip still looks right.
 	var FALLBACK_TOKENS = {
-		levelLengths: { 1: 40, 2: 35, 3: 30, 4: 25, 5: 20, 6: 15 },
+		levelLengths: { 1: 28, 2: 24, 3: 20, 4: 16, 5: 12, 6: 8 },
 		barHeight: 2,
 		currentBarHeight: 4,
-		currentBarLengthBoostPx: 5,
-		barGap: 7,
+		currentBarLengthBoostPx: 4,
+		barGap: 12,
 		minBarGap: 1,
 		normalOpacity: 0.45,
+		barSideAirPx: 7,
 		edgeGapPx: 2,
 		stripTopOffsetPx: 6,
 		panelFontPx: 12.5,
@@ -60,6 +61,16 @@
 		var max = 0;
 		for (var k in lengths) if (lengths.hasOwnProperty(k)) max = Math.max(max, lengths[k]);
 		return max;
+	}
+
+	// Total strip width = longest bar + horizontal air on each side (P2). Used for the container width
+	// and the reserve margin so the bars float with air on both sides.
+	function barSideAir() {
+		var v = tokens.barSideAirPx;
+		return typeof v === 'number' ? v : FALLBACK_TOKENS.barSideAirPx;
+	}
+	function stripTotalWidth() {
+		return stripWidth() + 2 * barSideAir();
 	}
 
 	function parseColor(value) {
@@ -157,7 +168,7 @@
 		document.body.style.marginLeft = '';
 		document.body.style.marginRight = '';
 		if (settings.viewerMode !== 'reserve') return;
-		var pad = (stripWidth() + tokens.edgeGapPx) + 'px';
+		var pad = (stripTotalWidth() + tokens.edgeGapPx) + 'px';
 		if (settings.side === 'right') document.body.style.marginRight = pad;
 		else document.body.style.marginLeft = pad;
 	}
@@ -220,7 +231,7 @@
 		s.top = '0';
 		s.bottom = '0';
 		s.paddingTop = tokens.stripTopOffsetPx + 'px';
-		s.width = stripWidth() + 'px';
+		s.width = stripTotalWidth() + 'px';
 		s.zIndex = '2147483000';
 		s.display = 'flex';
 		s.flexDirection = 'column';
@@ -243,6 +254,10 @@
 		bw.overflow = 'hidden';
 		bw.maxHeight = '100%';
 		bw.width = '100%';
+		bw.boxSizing = 'border-box';
+		// P2: side-air padding holds the bars off the strip's right edge; the wider strip leaves matching
+		// air on the left, so the stack floats with breathing room on both sides.
+		bw.paddingRight = barSideAir() + 'px';
 		// R6: the bar stack is the hover trigger zone and is interactive.
 		bw.pointerEvents = 'auto';
 		bw.cursor = 'pointer';
@@ -259,7 +274,8 @@
 		p.overflowX = 'hidden';
 		p.boxSizing = 'border-box';
 		p.padding = tokens.panelPaddingPx + 'px';
-		// R4: size to the longest row up to a cap; wrap beyond it (no ellipsis).
+		// P3: size to the longest row up to a (widened) cap; beyond the cap a row stays a single line and
+		// is trimmed with an ellipsis, never wrapped.
 		p.width = 'max-content';
 		p.minWidth = '140px';
 		p.maxWidth = panelMaxWidthPx() + 'px';
@@ -271,6 +287,9 @@
 		p.zIndex = '6';
 		// R6: the open panel is interactive.
 		p.pointerEvents = 'auto';
+		// P4: pointer cursor on the PANEL itself (not only rows), so whichever descendant
+		// document.elementFromPoint reports under the pointer still shows a pointer.
+		p.cursor = 'pointer';
 		// R4: anchor the panel at the PANE EDGE so it draws OVER the compact strip (and the note),
 		// rather than beside the strip leaving it visible.
 		if (side === 'right') { p.right = '0'; p.left = ''; }
@@ -319,9 +338,11 @@
 			r.padding = tokens.panelRowPaddingPx + 'px 6px';
 			r.paddingLeft = (tokens.panelPaddingPx + (level - 1) * tokens.panelIndentPx) + 'px';
 			r.color = colors.panelFg;
-			// R4: wrap long headings instead of trimming with an ellipsis.
-			r.whiteSpace = 'normal';
-			r.overflowWrap = 'anywhere';
+			// P3: each row is a SINGLE line; a heading too long for the (widened) panel is trimmed with a
+			// CSS ellipsis rather than wrapping onto a second line.
+			r.whiteSpace = 'nowrap';
+			r.overflow = 'hidden';
+			r.textOverflow = 'ellipsis';
 			// R5: rows read as clickable — pointer cursor + a hover background (see also viewer.css).
 			r.cursor = 'pointer';
 			r.borderRadius = '3px';
@@ -403,15 +424,20 @@
 			collapseTimer = setTimeout(function () { collapseTimer = null; collapse(); }, tokens.hoverGraceMs);
 			if (strip) strip.collapseTimer = collapseTimer;
 		}
-		// R6/R7: the hover trigger is the bar stack's actual bounding box (plus the open panel), tested
-		// on a document-level mousemove — which keeps firing while a mouse BUTTON is held, so dragging a
-		// text selection onto the minimap still opens the TOC.
+		// R6/P5: the hover trigger is the bar stack's actual bounding box (plus the open panel), tested
+		// on a document-level mousemove. The panel OPENS only when no mouse button is pressed
+		// (event.buttons === 0), so dragging a text selection across the minimap neither opens the panel
+		// nor blocks the selection. An already-open panel stays open while the pointer is over it even if
+		// a button goes down (so clicking a row does not collapse it).
 		var pointermove = function (event) {
 			if (count === 0) return;
 			var overBars = pointInRect(event.clientX, event.clientY, barsWrap.getBoundingClientRect());
 			var overPanel = expanded && pointInRect(event.clientX, event.clientY, panel.getBoundingClientRect());
-			if (overBars || overPanel) expand();
-			else if (expanded) scheduleCollapse();
+			if (overBars || overPanel) {
+				if (expanded || event.buttons === 0) expand();
+			} else if (expanded) {
+				scheduleCollapse();
+			}
 		};
 		var docleave = function () { if (expanded) scheduleCollapse(); };
 		var keydown = function (event) { if (event.key === 'Escape' && expanded) collapse(); };

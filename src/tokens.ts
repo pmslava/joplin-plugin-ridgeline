@@ -21,6 +21,11 @@ export interface RidgelineTokens {
 	// so many headings the stack would overflow the pane.
 	barGap: number;
 	minBarGap: number;
+	// Horizontal breathing room (px) on EACH side of the bar stack, inside the strip. The strip's
+	// total width is the longest bar + 2×this, so the bars float with air on both the pane-edge side
+	// and the text side (they are never flush against either). The reserve margin uses the total
+	// width too, so reserve mode keeps that same air between the text and the strip.
+	barSideAirPx: number;
 	// Opacity of a normal (non-current) bar, applied to the surface foreground colour.
 	normalOpacity: number;
 	// Small inset (px) from the pane edge the strip sits on.
@@ -44,28 +49,33 @@ export interface RidgelineTokens {
 }
 
 export const DESIGN_TOKENS: RidgelineTokens = {
-	levelLengths: { 1: 40, 2: 35, 3: 30, 4: 25, 5: 20, 6: 15 },
+	// Narrower, airier bars (P2): a linear H1→H6 progression capped at 28px with a 4px step, so the
+	// stack reads thinner while every adjacent level stays equally distinguishable.
+	levelLengths: { 1: 28, 2: 24, 3: 20, 4: 16, 5: 12, 6: 8 },
 	barHeight: 2,
 	currentBarHeight: 4,
-	currentBarLengthBoostPx: 5,
-	barGap: 7,
+	// A touch longer for the current bar — scaled down with the shorter bars so it still reads as
+	// "bolder" without dominating.
+	currentBarLengthBoostPx: 4,
+	// More vertical air between bars (P2): ~1.7× the previous 7px.
+	barGap: 12,
 	minBarGap: 1,
 	normalOpacity: 0.45,
+	barSideAirPx: 7,
 	edgeGapPx: 2,
 	stripTopOffsetPx: 6,
 	panelFontPx: 12.5,
 	panelIndentPx: 12,
 	panelPaddingPx: 8,
 	panelRowPaddingPx: 3,
-	panelMaxWidth: 320,
-	panelMaxWidthFraction: 0.6,
+	panelMaxWidth: 420,
+	panelMaxWidthFraction: 0.66,
 	panelGapPx: 0,
 	hoverGraceMs: 200,
 	pollMs: 700,
 };
 
-// The compact strip's width = the longest bar (H1). Both the strip container width and the reserve
-// margin derive from this, so widening H1 automatically widens the reserved gutter.
+// The bar AREA width = the longest bar (H1). This is the width the bars themselves occupy.
 export function stripWidth(tokens: RidgelineTokens): number {
 	let max = 0;
 	for (const key of Object.keys(tokens.levelLengths)) {
@@ -73,6 +83,13 @@ export function stripWidth(tokens: RidgelineTokens): number {
 		if (v > max) max = v;
 	}
 	return max;
+}
+
+// The strip's TOTAL width = the longest bar + horizontal air on each side. Both the strip container
+// width and the reserve margin derive from this, so the bars float with air on both sides and reserve
+// mode keeps that air between the text and the strip.
+export function stripTotalWidth(tokens: RidgelineTokens): number {
+	return stripWidth(tokens) + 2 * tokens.barSideAirPx;
 }
 
 // Bar length for a level, clamped to the deepest defined level.

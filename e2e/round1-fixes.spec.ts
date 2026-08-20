@@ -11,13 +11,15 @@ import {
 } from './helpers';
 
 /**
- * Round-1 UX fixes (R1–R7) verified against observable geometry/DOM.
+ * Round-1 UX fixes (R1–R6) plus the round-2 reversals P3 (single-line + ellipsis rows), P4 (pointer
+ * cursor on the real hit element) and P5 (a selection drag does NOT open the TOC), verified against
+ * observable geometry/DOM.
  *
  * One default launch (side=left, overlay). The note mixes heading levels and includes one very long
- * heading so the hover panel's no-truncation (R4) behaviour can be checked.
+ * heading so the hover panel's single-line + ellipsis (P3) behaviour can be checked.
  */
 const LONG_HEADING =
-  'A very long heading that must not be truncated with an ellipsis but should wrap across lines inside the panel';
+  'A very long heading that is wider than the panel and so is trimmed to a single line with a CSS ellipsis rather than wrapping';
 
 function buildBody(): string {
   const lines: string[] = [];
@@ -123,8 +125,10 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     expect(current.height).toBeGreaterThanOrEqual(normal.height + 1);
   });
 
-  // R4 — the hover panel OVERLAPS the strip (anchored at the pane edge) and does not ellipsize rows.
-  test('R4: panel overlaps the strip and long rows wrap instead of truncating', async () => {
+  // P3 — the hover panel OVERLAPS the strip (anchored at the pane edge). Rows are SINGLE-LINE; a row
+  // too long for the (widened) panel is trimmed with a CSS ellipsis, never wrapped. (This reverses the
+  // round-1 R4 behaviour — wrapping — per the user's new decision.)
+  test('P3: panel overlaps the strip; rows are single-line and overflowing rows ellipsize', async () => {
     const { win } = joplin;
     await collapsePanel(win);
     await hoverEditorBars(win);
@@ -139,23 +143,44 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     // The panel extends out over the note (wider than the compact strip).
     expect(panel.width).toBeGreaterThan(strip.width + 20);
 
-    // No row is horizontally clipped/ellipsized (content fits within the row box => it wrapped).
-    const overflow = await win.locator(`${EDITOR_STRIP} .ridgeline-panel-row`).evaluateAll((rows) =>
-      rows.map((r) => (r as HTMLElement).scrollWidth - (r as HTMLElement).clientWidth)
+    const rows = await win.locator(`${EDITOR_STRIP} .ridgeline-panel-row`).evaluateAll((els) =>
+      els.map((el) => {
+        const cs = getComputedStyle(el as HTMLElement);
+        return {
+          height: (el as HTMLElement).getBoundingClientRect().height,
+          lineHeight: parseFloat(cs.lineHeight) || 0,
+          padTop: parseFloat(cs.paddingTop) || 0,
+          padBottom: parseFloat(cs.paddingBottom) || 0,
+          whiteSpace: cs.whiteSpace,
+          textOverflow: cs.textOverflow,
+          scrollWidth: (el as HTMLElement).scrollWidth,
+          clientWidth: (el as HTMLElement).clientWidth,
+          text: (el.textContent || '').slice(0, 24),
+        };
+      })
     );
-    for (const o of overflow) expect(o).toBeLessThanOrEqual(1);
-    // The long heading really is present and forced the wrap (its row is taller than one line).
-    const longRow = win.locator(`${EDITOR_STRIP} .ridgeline-panel-row`, { hasText: 'A very long heading' });
-    const lh = await longRow.first().evaluate((el) => {
-      const cs = getComputedStyle(el);
-      return { h: el.getBoundingClientRect().height, line: parseFloat(cs.lineHeight) || 0 };
-    });
-    expect(lh.h).toBeGreaterThan(lh.line + 2); // wrapped onto 2+ lines
+    for (const r of rows) {
+      // Single line: the row is no taller than one line + its vertical padding (a wrapped row would be
+      // ~2× taller). And it is set up to ellipsize rather than wrap.
+      expect(r.height, `row "${r.text}" single-line height`).toBeLessThanOrEqual(
+        r.lineHeight + r.padTop + r.padBottom + 3
+      );
+      expect(r.whiteSpace, `row "${r.text}" white-space`).toBe('nowrap');
+      expect(r.textOverflow, `row "${r.text}" text-overflow`).toBe('ellipsis');
+    }
+    // The long heading really overflows its row, so the ellipsis is actually engaged (clipped content).
+    const longRow = rows.find((r) => r.text.startsWith('A very long heading'));
+    expect(longRow, 'long heading row present').toBeTruthy();
+    expect(longRow!.scrollWidth - longRow!.clientWidth, 'long row content is clipped').toBeGreaterThan(1);
     await collapsePanel(win);
   });
 
-  // R5 — a row changes background on hover and the cursor is a pointer.
-  test('R5: rows have a hover highlight and pointer cursor', async () => {
+  // R5/P4 — a row changes background on hover, and the cursor is a pointer. The cursor is asserted on
+  // the element document.elementFromPoint ACTUALLY returns at the row's centre (what the OS uses to pick
+  // the displayed cursor), not on the row node we hand-picked — the earlier row-only assertion passed
+  // while the real displayed cursor was still the editor's default, because a different element sat
+  // under the pointer. (P4.)
+  test('R5/P4: rows have a hover highlight and the hit element shows a pointer cursor', async () => {
     const { win } = joplin;
     await collapsePanel(win);
     await hoverEditorBars(win);
@@ -164,14 +189,25 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     // A non-current row (index 2) so the current-row styling does not confound the hover background.
     const row = win.locator(`[data-testid="ridgeline-editor-row-2"]`);
     const before = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
-    const cursor = await row.evaluate((el) => getComputedStyle(el).cursor);
-    expect(cursor).toBe('pointer');
     await row.hover();
     await win.waitForTimeout(150);
     const after = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
     expect(after).not.toBe(before);
-    // The hover background is a real (non-transparent) colour.
     expect(after).not.toBe('rgba(0, 0, 0, 0)');
+
+    // The displayed-cursor source: whatever element is topmost at the row's centre must resolve to a
+    // pointer cursor.
+    const hit = await row.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return {
+        tag: target?.tagName ?? null,
+        cls: target?.className ?? null,
+        cursor: target ? getComputedStyle(target).cursor : null,
+        isRowOrInside: !!target && (target === el || el.contains(target) || target.contains(el)),
+      };
+    });
+    expect(hit.cursor, `elementFromPoint hit <${hit.tag} class="${hit.cls}"> cursor`).toBe('pointer');
     await collapsePanel(win);
   });
 
@@ -196,25 +232,37 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     await collapsePanel(win);
   });
 
-  // R7 — a selection drag (button held) onto the bars opens the TOC.
-  test('R7: dragging a selection onto the bars opens the TOC', async () => {
+  // P5 — a text-selection drag (button held) across the bars must NOT open the TOC; a plain hover
+  // (no button) still opens it. (This reverses the round-1 R7 behaviour per the user's new decision.)
+  test('P5: dragging a selection across the bars does NOT open the TOC; a button-free hover does', async () => {
     const { win } = joplin;
     await collapsePanel(win);
     const editor = await boxOf(win, '.cm-editor');
     const bars = await boxOf(win, EDITOR_BARS);
+    const barsCx = bars.x + bars.width / 2;
+    const barsCy = bars.y + bars.height / 2;
 
-    // Start a selection over the note text, hold the button, and drag onto the bar stack.
+    // Start a selection over the note text, hold the button, and drag across the bar stack.
     const startX = editor.x + editor.width / 2;
     const startY = editor.y + editor.height / 2;
     await win.mouse.move(startX, startY);
     await win.mouse.down();
-    // Move in a couple of steps to emulate a real drag, ending over the bars.
-    await win.mouse.move((startX + bars.x) / 2, (startY + bars.y) / 2, { steps: 4 });
-    await win.mouse.move(bars.x + bars.width / 2, bars.y + bars.height / 2, { steps: 4 });
-    await win.waitForTimeout(200);
+    await win.mouse.move((startX + barsCx) / 2, (startY + barsCy) / 2, { steps: 4 });
+    await win.mouse.move(barsCx, barsCy, { steps: 4 });
+    await win.waitForTimeout(250);
     const expandedWhileDragging = await win.locator(EDITOR_STRIP).getAttribute('data-expanded');
+    expect(expandedWhileDragging).not.toBe('true');
+    // The drag also did not eat the selection: releasing over the bars leaves a real selection.
     await win.mouse.up();
-    expect(expandedWhileDragging).toBe('true');
+    const hasSelection = await win.evaluate(() => (window.getSelection()?.toString().length ?? 0) > 0);
+    expect(hasSelection, 'text selection survived the drag across the minimap').toBe(true);
+
+    // A button-free hover over the same bars DOES open the panel.
+    await collapsePanel(win);
+    await win.mouse.move(barsCx, barsCy);
+    await win.waitForTimeout(50);
+    await win.mouse.move(barsCx + 1, barsCy);
+    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-expanded', 'true', { timeout: 5_000 });
     await collapsePanel(win);
   });
 });

@@ -1,4 +1,4 @@
-# Ridgeline — manual checklist (Phase 2, v0.2.1)
+# Ridgeline — manual checklist (Phase 2, v0.2.2)
 
 Ridgeline draws a **compact minimap** at one edge of the Markdown editor and the rendered viewer: a
 vertical stack of thin horizontal bars, one per heading, where **bar length encodes heading level**
@@ -51,53 +51,37 @@ Use a note with several headings (mix of `#`…`######`) and enough text to scro
 - [ ] **Multi-window.** With the note selected, press **Ctrl+Alt+N** (Note → *Open note in new
       window*). The minimap appears in the **new window** too and tracks its own scroll independently.
 
-## Round-1 fixes (v0.2.1) — re-check these
+## Round-2 re-check (v0.2.2)
 
-These are the eight issues from the first real-desktop test round. Re-verify each on Joplin 3.7.x
-with the Markdown editor's **inline rendering ON** (Settings → Editor → *Render markup in editor*),
-dark theme, on a note with a mix of `#`…`######` headings and at least one **very long** heading.
+Re-verify each on Joplin 3.7.x with the Markdown editor's **inline rendering ON** (Settings → Editor
+→ *Render markup in editor*), dark theme, on a note with a mix of `#`…`######` headings and at least
+one **very long** heading.
 
-- [ ] **R1 — Top anchor.** The bar stack sits near the **top** of the pane (small top offset), not
-      floating in the vertical centre.
-- [ ] **R2 — Right-aligned bars.** Bars are flush to the strip's **right edge** with ragged left
-      ends, on **both** the left and right side (Ctrl+Alt+R to flip and confirm).
-- [ ] **R3 — Current bar stands out.** The current-section bar is clearly **thicker + brighter**
-      (and a touch longer) than the others — "where am I" is obvious at a glance.
-- [ ] **R4 — Panel overlays, no truncation.** Hovering opens the TOC **over** the strip, anchored at
-      the pane edge (the strip is covered, not left beside the panel). The **long heading is not cut
-      off with an ellipsis** — it wraps; the panel is only as wide as the longest row, capped at a
-      sane fraction of the pane.
-- [ ] **R5 — Row affordance.** Hovering a TOC row **changes its background** and the cursor is a
-      **pointer**.
-- [ ] **R6 — Trigger zone.** Hovering the empty edge band **below** the bars does **not** open the
-      TOC (and does not block selecting text there); only hovering the **bars** opens it.
-- [ ] **R7 — Selection drag.** While **selecting text** (mouse button held), drag the pointer onto
-      the bars — the TOC still **opens**.
-- [ ] **R8 — Heading indentation (regression). STATUS: could not reproduce — needs your live
-      bisection.** With the plugin active, heading lines should keep their text **aligned with body
-      text** (no progressive left shift by level), in every side (left/right) × mode (overlay/reserve)
-      combo, existing and freshly typed, main and secondary windows. This was tested exhaustively on a
-      real Joplin **3.7.6** with inline rendering ON in the worst-case **right + reserve** combo, both
-      in a clean profile **and in a faithful copy of your environment** — your actual
-      `userchrome.css` plus **Rich Markdown** and **Wrapped Line Indentation** loaded (see
-      `e2e/heading-indent-faithful.spec.ts`). In every case all headings stayed flush (offset 0.0px).
-      Ridgeline's reserve is a single **uniform** pad on `.cm-content`, so it cannot shift text per
-      level, and Wrapped Line Indent only indents lines with **leading whitespace** (headings have
-      none). So the shift you saw is **environment-specific** and not something Ridgeline injects.
-      **If you still see it, bisect on your live desktop** (it is almost certainly another plugin's
-      per-level heading decoration, not Ridgeline):
-      1. Reproduce it first (right + reserve, a note with `#`…`######` headings).
-      2. Tools → Options → Plugins: **disable Ridgeline only**, relaunch. If the shift *remains*, it is
-         **not** Ridgeline — re-enable it and go to step 3. If it *disappears*, capture a screenshot and
-         reopen this as a Ridgeline bug (it did not reproduce here, so we'd need your exact combo).
-      3. With Ridgeline **on**, disable the other CM6 editor plugins **one at a time** (start with
-         **Rich Markdown**, then **Wrapped Line Indentation**, **Markdown Alerts**, **codeblock
-         autocomplete**, **MathMode**), relaunching between each, until the shift stops. The last one
-         you disabled is the interacting plugin.
-      4. As a userchrome cross-check, temporarily rename `~/.config/joplin-desktop/userchrome.css` and
-         relaunch. If the shift stops, a local CSS rule is the cause.
-      Report which step cleared it and we'll scope Ridgeline's reserve padding (or document the rule)
-      against that specific interaction.
+- [ ] **P1 — Leading-space headings (root cause found).** Ridgeline lists a bar for headings that
+      carry a leading space before the hash (` # Title`, `  ## Title` — valid CommonMark), in **both**
+      editor and viewer, and clicking one **jumps** to it. *Separately:* if you type ` # Title` with a
+      leading space you may notice the **editor** draws the heading text slightly **indented** (more so
+      at higher levels), while the **rendered viewer** shows it flush. That indentation is a **Joplin
+      core** editor bug, **not** Ridgeline — it reproduces in a clean profile with **no plugins at all**
+      (the editor renders the leading whitespace at the heading's larger font; the viewer strips it per
+      CommonMark). Removing the leading space fixes the line. Toggling Ridgeline on/off does not change
+      it in the slightest. A ready-to-file upstream report is in the round-2 hand-off notes.
+- [ ] **P2 — Narrower, airier bars.** The bars are **thinner/shorter** than before (H1 ≈ 28px down to
+      H6 ≈ 8px) and the stack has **more air**: visible gaps on **both sides** of the bars inside the
+      strip, and a **larger vertical gap** between bars. It should read as a thin, airy stack.
+- [ ] **P3 — Single-line TOC rows.** Hovering opens the TOC. Every row is **one line tall**. A heading
+      too long for the panel is trimmed with a CSS **ellipsis** (`…`) — it must **not** wrap onto a
+      second line. The panel may be a bit **wider** than before, up to a moderate cap.
+- [ ] **P4 — Pointer cursor on rows.** Moving the pointer over a TOC row shows a **pointer (hand)**
+      cursor — in **both** the editor and the rendered viewer. (Check the real on-screen cursor, not
+      just the hover highlight.)
+- [ ] **P5 — Selection drag does NOT open the TOC.** While **selecting text** (mouse button held),
+      drag the pointer across the bars — the TOC must **stay closed** and the **selection must not be
+      interrupted**. A plain **hover with no button pressed** over the bars still opens it. (This is the
+      reverse of the round-1 R7 behaviour.)
+
+Round-1 fixes R1–R6 (top anchor, right-aligned bars, current-bar prominence, panel overlay, row hover
+highlight, trigger-zone) remain in force — spot-check them too.
 
 ## Notes
 

@@ -1,6 +1,6 @@
 {
   "name": "joplin-plugin-ridgeline",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Ridgeline: a hover-expanding minimap outline for the Joplin editor and viewer.",
   "scripts": {
     "dist": "webpack --env joplin-plugin-config=buildMain && webpack --env joplin-plugin-config=buildExtraScripts && webpack --env joplin-plugin-config=createArchive",

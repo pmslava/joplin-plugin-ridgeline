@@ -15,6 +15,7 @@ import {
   waitForEditorStrip,
   EDITOR_STRIP,
 } from './helpers';
+import { DESIGN_TOKENS } from '../src/tokens';
 
 /**
  * Phase-2 minimap behaviour on a note whose headings span H1..H6. One default launch covers the
@@ -38,7 +39,7 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
   // The current-section bar carries a small length boost (R3, currentBarLengthBoostPx in tokens), so
   // its rendered width is longer than its pure level width. Normalise that out to validate the
   // per-level (base) length encoding.
-  const CURRENT_BAR_LENGTH_BOOST = 5;
+  const CURRENT_BAR_LENGTH_BOOST = DESIGN_TOKENS.currentBarLengthBoostPx;
 
   // Returns the BASE bar length per bar (rendered width minus the current-bar boost, if current).
   async function editorBaseBarWidths(): Promise<number[]> {
@@ -55,7 +56,7 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
   }
 
   // D1/R9 — one bar per heading, base lengths diminishing LINEARLY by heading level (H1 longest → H6
-  // shortest) per the shared design tokens (40/35/30/25/20/15 — an equal 5px step per level).
+  // shortest) per the shared design tokens (28/24/20/16/12/8 — an equal 4px step per level; P2).
   test('bar count matches headings and widths are linearly ordered by level', async () => {
     await scrollEditorTo(joplin.win, 0);
     expect(await joplin.win.locator(`${EDITOR_STRIP} .ridgeline-bar`).count()).toBe(
@@ -67,9 +68,9 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
       // Each deeper level's base bar is strictly shorter than the one above it.
       expect(widths[i - 1]).toBeGreaterThan(widths[i]);
     }
-    // Sanity-check the extremes against the tokens (H1 = 40, H6 = 15).
-    expect(Math.round(widths[0])).toBe(40);
-    expect(Math.round(widths[widths.length - 1])).toBe(15);
+    // Sanity-check the extremes against the tokens (H1 = longest, H6 = shortest).
+    expect(Math.round(widths[0])).toBe(DESIGN_TOKENS.levelLengths[1]);
+    expect(Math.round(widths[widths.length - 1])).toBe(DESIGN_TOKENS.levelLengths[6]);
     // R9: the decrements are EQUAL (linear), so every adjacent pair is equally distinguishable. Each
     // step is ~5px; assert they match within 1px of each other.
     const steps = widths.slice(1).map((w, i) => widths[i] - w);
@@ -199,5 +200,27 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     await expect(frame.locator('#ridgeline-viewer-strip')).toHaveAttribute('data-side', 'right', {
       timeout: 15_000,
     });
+  });
+
+  // P4 — the viewer TOC rows must show a pointer cursor too, asserted on the element
+  // document.elementFromPoint actually returns at the row centre (the displayed-cursor source).
+  test('P4: viewer TOC rows show a pointer cursor on the hit element', async () => {
+    const { win } = joplin;
+    const frame = await ensureViewerVisible(win);
+    // Side may be 'right' from the previous test; hover the viewer bar stack to expand the panel.
+    const bars = frame.locator('#ridgeline-viewer-strip .ridgeline-bars');
+    await expect(bars).toBeVisible({ timeout: 15_000 });
+    await bars.hover();
+    await expect(frame.locator('#ridgeline-viewer-strip')).toHaveAttribute('data-expanded', 'true', {
+      timeout: 5_000,
+    });
+    const row = frame.locator('#ridgeline-viewer-strip .ridgeline-panel-row').nth(2);
+    await row.hover();
+    const hit = await row.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { tag: target?.tagName ?? null, cls: target?.className ?? null, cursor: target ? getComputedStyle(target).cursor : null };
+    });
+    expect(hit.cursor, `viewer elementFromPoint hit <${hit.tag} class="${hit.cls}"> cursor`).toBe('pointer');
   });
 });

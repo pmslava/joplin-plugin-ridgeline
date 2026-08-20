@@ -34,7 +34,7 @@ import {
 	type Side,
 } from '../common';
 import { parseHeadings, type EditorHeading } from '../headings';
-import { barLengthFor, DESIGN_TOKENS, stripWidth, type RidgelineTokens } from '../tokens';
+import { barLengthFor, DESIGN_TOKENS, stripTotalWidth, type RidgelineTokens } from '../tokens';
 
 // How close to the top edge (px) a heading must be to still count as "at the top". A small tolerance
 // keeps the active heading stable across sub-pixel layout jitter.
@@ -85,7 +85,7 @@ function reserveTheme(
 	if (settings.editorMode !== 'reserve') {
 		return EditorView.theme({});
 	}
-	const pad = `${stripWidth(tokens) + tokens.edgeGapPx}px`;
+	const pad = `${stripTotalWidth(tokens) + tokens.edgeGapPx}px`;
 	const prop = settings.side === 'right' ? 'paddingRight' : 'paddingLeft';
 	return EditorView.theme({
 		'.cm-content': { [prop]: pad },
@@ -151,11 +151,12 @@ class EditorStrip {
 		};
 		this.ownerWin.addEventListener('resize', this.onResize, { passive: true });
 
-		// R6/R7: the hover trigger is the bar stack's actual bounding box (plus the open panel), not the
-		// full-height container. We hit-test the pointer against those rects on a document-level
-		// mousemove — which keeps firing even while a mouse BUTTON is held (a text-selection drag), so
-		// dragging a selection onto the minimap still opens the TOC.
-		this.onPointerMove = (event: MouseEvent) => this.handlePointerMove(event.clientX, event.clientY);
+		// R6/P5: the hover trigger is the bar stack's actual bounding box (plus the open panel), not the
+		// full-height container. We hit-test the pointer on a document-level mousemove and pass the
+		// button state: the panel OPENS only when no mouse button is pressed (buttons === 0), so
+		// dragging a text selection across the minimap neither opens the panel nor blocks the selection.
+		this.onPointerMove = (event: MouseEvent) =>
+			this.handlePointerMove(event.clientX, event.clientY, event.buttons);
 		this.ownerDoc.addEventListener('mousemove', this.onPointerMove, { passive: true });
 		this.onDocLeave = () => this.scheduleCollapse();
 		this.ownerDoc.addEventListener('mouseleave', this.onDocLeave);
@@ -225,7 +226,7 @@ class EditorStrip {
 		s.top = '0';
 		s.bottom = '0';
 		s.paddingTop = `${this.tokens.stripTopOffsetPx}px`;
-		s.width = `${stripWidth(this.tokens)}px`;
+		s.width = `${stripTotalWidth(this.tokens)}px`;
 		s.zIndex = '5';
 		s.boxSizing = 'border-box';
 		s.background = 'transparent';
@@ -243,8 +244,12 @@ class EditorStrip {
 		bw.overflow = 'hidden';
 		bw.maxHeight = '100%';
 		bw.width = '100%';
-		// R2: bars flush to the right edge of the strip. R6: the bar stack is the hover trigger zone.
+		bw.boxSizing = 'border-box';
+		// R2: bars right-aligned within the strip. P2: a side-air padding on the right holds the bars
+		// off the strip's right edge; the strip being wider than the longest bar leaves matching air on
+		// the left — so the stack floats with breathing room on BOTH sides.
 		bw.alignItems = 'flex-end';
+		bw.paddingRight = `${this.tokens.barSideAirPx}px`;
 		bw.pointerEvents = 'auto';
 		bw.cursor = 'pointer';
 
@@ -268,8 +273,8 @@ class EditorStrip {
 		p.overflowX = 'hidden';
 		p.boxSizing = 'border-box';
 		p.padding = `${this.tokens.panelPaddingPx}px`;
-		// R4: size to the longest row (max-content) up to a cap; beyond the cap rows WRAP (see
-		// renderPanel) rather than being trimmed with an ellipsis.
+		// P3: size to the longest row (max-content) up to a (widened) cap; beyond the cap a row stays a
+		// single line and is trimmed with an ellipsis (see renderPanel), never wrapped.
 		p.width = 'max-content';
 		p.minWidth = '140px';
 		p.maxWidth = `${this.panelMaxWidthPx()}px`;
@@ -281,6 +286,11 @@ class EditorStrip {
 		p.zIndex = '6';
 		// R6: the open panel is interactive (its rows are clickable and part of the hover zone).
 		p.pointerEvents = 'auto';
+		// P4: the whole panel reads as clickable. Setting the pointer cursor on the PANEL (not only the
+		// rows) guarantees it regardless of which descendant document.elementFromPoint reports under the
+		// pointer — the earlier row-only cursor could lose to the panel body / a child that actually
+		// received the pointer, and CodeMirror's own `.cm-content { cursor: text }` never leaks in here.
+		p.cursor = 'pointer';
 		// R4: the panel is anchored at the PANE EDGE and draws OVER the compact strip (and onward over
 		// the text), rather than beside the strip leaving it visible.
 		if (this.settings.side === 'right') {
@@ -379,9 +389,11 @@ class EditorStrip {
 			r.padding = `${this.tokens.panelRowPaddingPx}px 6px`;
 			r.paddingLeft = `${this.tokens.panelPaddingPx + (heading.level - 1) * this.tokens.panelIndentPx}px`;
 			r.color = this.colors.panelFg;
-			// R4: never truncate — wrap long headings instead of trimming with an ellipsis.
-			r.whiteSpace = 'normal';
-			r.overflowWrap = 'anywhere';
+			// P3: each row is a SINGLE line; a heading too long for the (widened) panel is trimmed with a
+			// CSS ellipsis rather than wrapping onto a second line.
+			r.whiteSpace = 'nowrap';
+			r.overflow = 'hidden';
+			r.textOverflow = 'ellipsis';
 			// R5: rows read as clickable — pointer cursor, and a background change on hover.
 			r.cursor = 'pointer';
 			r.borderRadius = '3px';
@@ -480,15 +492,20 @@ class EditorStrip {
 		return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
 	}
 
-	// R6/R7 hover driver: expand while the pointer is over the bar stack (or the open panel), collapse
-	// otherwise. Geometry-based so it works during a button-held selection drag, and so the empty
-	// full-height band neither triggers nor blocks anything.
-	private handlePointerMove(x: number, y: number): void {
+	// R6/P5 hover driver: expand while the pointer HOVERS the bar stack (or the open panel) with no
+	// button pressed; collapse otherwise. Passing the button state means a text-selection drag
+	// (buttons !== 0) crossing the minimap never opens the panel. An already-open panel stays open
+	// while the pointer is over it even if a button goes down (so clicking a row does not collapse it).
+	private handlePointerMove(x: number, y: number, buttons: number): void {
 		if (this.headings.length === 0) return;
 		const overBars = this.pointInRect(x, y, this.barsWrap.getBoundingClientRect());
 		const overPanel = this.expanded && this.pointInRect(x, y, this.panel.getBoundingClientRect());
-		if (overBars || overPanel) this.expand();
-		else if (this.expanded) this.scheduleCollapse();
+		if (overBars || overPanel) {
+			// expand() is idempotent and cancels any pending collapse; only OPEN on a button-free hover.
+			if (this.expanded || buttons === 0) this.expand();
+		} else if (this.expanded) {
+			this.scheduleCollapse();
+		}
 	}
 
 	private expand(): void {
