@@ -1,0 +1,24 @@
+{
+	"compilerOptions": {
+		"outDir": "./dist/",
+		"module": "commonjs",
+		"target": "es2017",
+		"lib": ["es2017", "dom"],
+		"jsx": "react",
+		"allowJs": true,
+		"baseUrl": ".",
+		"esModuleInterop": true,
+		"skipLibCheck": true
+	},
+	"include": ["src", "api"],
+	"exclude": [
+		"node_modules",
+		"dist",
+		"publish",
+		".e2e-cache",
+		"e2e",
+		"e2e/.profiles",
+		"playwright-report",
+		"test-results"
+	]
+}

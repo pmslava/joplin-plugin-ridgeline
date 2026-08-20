@@ -1,0 +1,10 @@
+node_modules/
+dist/
+publish/
+
+# Real-app E2E: downloaded Joplin build, throwaway profiles and Playwright output
+.e2e-cache/
+e2e/.profiles/
+test-results/
+playwright-report/
+.vscode/

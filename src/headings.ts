@@ -1,0 +1,92 @@
+// Heading extraction from raw Markdown, used by the CodeMirror editor content script.
+//
+// The slugs generated here must match the anchor ids Joplin puts on rendered headings, so the
+// coordinator's scrollToHash jump lands on the right element. Joplin builds those ids with
+// laurent22's uslug fork plus a "-2"/"-3" suffix for duplicate headings; we do the same.
+//
+// Parsing is a line scan (not a full Markdown parse): it is dependency-light, robust enough for the
+// smoke build, and tracks fenced code blocks / HTML comment blocks so "#" inside them is ignored.
+// Ported from cqroot/joplin-outline's markdownHeaders.ts + markdownSlug.ts.
+
+import uslug from '@joplin/fork-uslug';
+
+export interface EditorHeading {
+	level: number;
+	text: string;
+	line: number; // 0-based line number of the heading in the document
+	slug: string;
+}
+
+function removeMarkdownLinks(line: string): string {
+	let result = line;
+	// [text](url) -> text
+	// eslint-disable-next-line no-constant-condition
+	while (true) {
+		const next = result.replace(/\[(.*?)\]\(.*?\)/, '$1');
+		if (next === result) break;
+		result = next;
+	}
+	return result;
+}
+
+// Strip the inline emphasis/formatting markers uslug would otherwise fold into the slug oddly, so
+// the slug matches what Joplin generates from the same heading.
+function cleanForSlug(text: string): string {
+	let result = removeMarkdownLinks(text);
+	// remove inline code backticks but keep content
+	result = result.replace(/`([^`]*)`/g, '$1');
+	// strip **bold** / *italic* / __ / _ markers (leave the inner text)
+	result = result.replace(/(\*\*|__)(.*?)\1/g, '$2');
+	result = result.replace(/(\*|_)(.*?)\1/g, '$2');
+	return result;
+}
+
+function slugFor(text: string, seen: Map<string, number>): string {
+	const base = uslug(cleanForSlug(text));
+	const count = seen.get(base) ?? 0;
+	seen.set(base, count + 1);
+	return count === 0 ? base : `${base}-${count + 1}`;
+}
+
+export function parseHeadings(body: string): EditorHeading[] {
+	const headings: EditorHeading[] = [];
+	const seen = new Map<string, number>();
+	const lines = body.split('\n');
+
+	let inFence = false;
+	let inComment = false;
+
+	for (let index = 0; index < lines.length; index++) {
+		const rawLine = lines[index];
+
+		// Toggle fenced code blocks (``` or ~~~), but not a single-line inline `code`.
+		const fenceMatch = rawLine.match(/^\s{0,3}(```|~~~)/);
+		if (fenceMatch && !/^\s{0,3}(```|~~~).*\1/.test(rawLine)) {
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence) continue;
+
+		// Toggle HTML comment blocks.
+		if (/<!--/.test(rawLine) && !/-->/.test(rawLine)) {
+			inComment = true;
+			continue;
+		}
+		if (inComment) {
+			if (/-->/.test(rawLine)) inComment = false;
+			continue;
+		}
+
+		const line = rawLine.trim().replace(/\s+#*$/, '');
+		const match = line.match(/^(#{1,6})\s+(.*?)\s*$/);
+		if (!match) continue;
+
+		const level = match[1].length;
+		const text = (match[2] ?? '').trim();
+		if (!text) continue;
+
+		headings.push({ level, text, line: index, slug: slugFor(text, seen) });
+	}
+
+	return headings;
+}

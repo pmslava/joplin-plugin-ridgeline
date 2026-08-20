@@ -1,0 +1,54 @@
+/* Ridgeline viewer strip — smoke-build styling. Deliberately plain: an obvious coloured strip. */
+
+.ridgeline-viewer-strip {
+	box-sizing: border-box;
+	background: linear-gradient(180deg, #4c8bf5, #7d4cf5);
+	overflow: visible;
+}
+
+.ridgeline-viewer-strip .ridgeline-current {
+	position: absolute;
+	top: 2px;
+	font-size: 11px;
+	line-height: 14px;
+	padding: 1px 4px;
+	white-space: nowrap;
+	max-width: 240px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: #fff;
+	background: rgba(0, 0, 0, 0.55);
+	border-radius: 3px;
+	pointer-events: none;
+}
+
+.ridgeline-viewer-strip[data-side="left"] .ridgeline-current {
+	left: 16px;
+}
+
+.ridgeline-viewer-strip[data-side="right"] .ridgeline-current {
+	right: 16px;
+}
+
+.ridgeline-viewer-strip .ridgeline-ticks {
+	position: absolute;
+	inset: 0;
+}
+
+.ridgeline-viewer-strip .ridgeline-tick {
+	position: absolute;
+	left: 2px;
+	right: 2px;
+	height: 3px;
+	padding: 0;
+	margin: 0;
+	border: none;
+	border-radius: 2px;
+	background: rgba(255, 255, 255, 0.75);
+	cursor: pointer;
+}
+
+.ridgeline-viewer-strip .ridgeline-tick.is-active {
+	background: #ffe066;
+	height: 5px;
+}

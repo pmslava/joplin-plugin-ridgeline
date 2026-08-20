@@ -1,0 +1,44 @@
+{
+  "name": "joplin-plugin-ridgeline",
+  "version": "0.1.0",
+  "description": "Ridgeline: a hover-expanding minimap outline for the Joplin editor and viewer (early smoke build).",
+  "scripts": {
+    "dist": "webpack --env joplin-plugin-config=buildMain && webpack --env joplin-plugin-config=buildExtraScripts && webpack --env joplin-plugin-config=createArchive",
+    "prepare": "npm run dist",
+    "updateVersion": "webpack --env joplin-plugin-config=updateVersion",
+    "setup:e2e": "bash scripts/setup-e2e.sh",
+    "test:e2e": "npm run dist && npm run setup:e2e && xvfb-run -a --server-args=\"-screen 0 1920x1080x24\" playwright test"
+  },
+  "license": "MIT",
+  "keywords": [
+    "joplin-plugin",
+    "joplin",
+    "outline",
+    "minimap",
+    "toc",
+    "heading"
+  ],
+  "devDependencies": {
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.26.3",
+    "@joplin/lib": "~2.9",
+    "@playwright/test": "^1.62.0",
+    "@types/node": "^18.7.13",
+    "chalk": "^4.1.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "fs-extra": "^10.1.0",
+    "glob": "^8.0.3",
+    "playwright": "^1.62.0",
+    "tar": "^6.1.11",
+    "ts-loader": "^9.3.1",
+    "typescript": "^4.8.2",
+    "webpack": "^5.74.0",
+    "webpack-cli": "^4.10.0"
+  },
+  "dependencies": {
+    "@joplin/fork-uslug": "^1.0.13"
+  },
+  "files": [
+    "publish"
+  ]
+}
