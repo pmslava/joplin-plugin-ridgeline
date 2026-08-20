@@ -8,3 +8,6 @@ e2e/.profiles/
 test-results/
 playwright-report/
 .vscode/
+
+# Local E2E run logs
+e2e-run*.log
