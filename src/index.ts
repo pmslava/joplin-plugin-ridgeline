@@ -1,19 +1,24 @@
 import joplin from 'api';
-import { ContentScriptType, SettingItemType, SettingStorage } from 'api/types';
+import { ContentScriptType, MenuItemLocation, SettingItemType, SettingStorage } from 'api/types';
 import {
+	EDITOR_APPLY_SETTINGS_COMMAND,
 	EDITOR_CONTENT_SCRIPT_ID,
 	EDITOR_SCROLL_COMMAND,
 	PLUGIN_ID,
 	SETTING_EDITOR_MODE,
+	SETTING_MAX_DEPTH,
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
+	TOGGLE_SIDE_COMMAND,
 	VIEWER_CONTENT_SCRIPT_ID,
 	type ContentScriptMessage,
 	type PaneMode,
 	type RidgelineSettings,
+	type SettingsResponse,
 	type Side,
 } from './common';
 import { parseHeadings } from './headings';
+import { DESIGN_TOKENS } from './tokens';
 
 const SETTINGS_SECTION = 'ridgeline.settings';
 
@@ -59,6 +64,17 @@ async function registerSettings(): Promise<void> {
 			options: { overlay: 'Overlay', reserve: 'Reserve margin' },
 			storage: SettingStorage.File,
 		},
+		[SETTING_MAX_DEPTH]: {
+			value: 6,
+			type: SettingItemType.Int,
+			isEnum: true,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Maximum heading depth',
+			description: 'Deepest heading level shown in the minimap. Headings deeper than this are hidden.',
+			options: { 1: 'H1 only', 2: 'H1–H2', 3: 'H1–H3', 4: 'H1–H4', 5: 'H1–H5', 6: 'H1–H6' },
+			storage: SettingStorage.File,
+		},
 	});
 }
 
@@ -67,12 +83,23 @@ async function readSettings(): Promise<RidgelineSettings> {
 		SETTING_SIDE,
 		SETTING_EDITOR_MODE,
 		SETTING_VIEWER_MODE,
+		SETTING_MAX_DEPTH,
 	]);
 	// Coerce defensively — a seeded/edited settings.json could carry an unexpected value.
 	const side: Side = values[SETTING_SIDE] === 'right' ? 'right' : 'left';
 	const editorMode: PaneMode = values[SETTING_EDITOR_MODE] === 'reserve' ? 'reserve' : 'overlay';
 	const viewerMode: PaneMode = values[SETTING_VIEWER_MODE] === 'reserve' ? 'reserve' : 'overlay';
-	return { side, editorMode, viewerMode };
+	let maxDepth = Number(values[SETTING_MAX_DEPTH]);
+	if (!Number.isFinite(maxDepth)) maxDepth = 6;
+	maxDepth = Math.min(6, Math.max(1, Math.round(maxDepth)));
+	return { side, editorMode, viewerMode, maxDepth };
+}
+
+// The getSettings answer both content scripts read: resolved settings + the shared design tokens.
+// The viewer strip (a plain-JS iframe asset that cannot import tokens.ts) gets its tokens from here.
+async function readSettingsResponse(): Promise<SettingsResponse> {
+	const settings = await readSettings();
+	return { ...settings, tokens: DESIGN_TOKENS };
 }
 
 // Dual-fire the jump exactly like cqroot/joplin-outline: scrollToHash moves the rendered viewer to
@@ -123,7 +150,7 @@ async function onContentScriptMessage(rawMessage: ContentScriptMessage): Promise
 
 	switch (rawMessage.type) {
 		case 'getSettings':
-			return readSettings();
+			return readSettingsResponse();
 		case 'jump':
 			await handleJump(rawMessage.anchor, rawMessage.line);
 			return { ok: true };
@@ -153,6 +180,41 @@ joplin.plugins.register({
 			'./contentScripts/viewerContentScript.js',
 		);
 		await joplin.contentScripts.onMessage(VIEWER_CONTENT_SCRIPT_ID, onContentScriptMessage);
+
+		// Live settings (no relaunch). On any setting change, push the new values into the editor strip
+		// via its self-registered command. The viewer strip has no main→iframe push channel, so it
+		// polls getSettings itself and picks the change up on its own (see viewer.js).
+		await joplin.settings.onChange(async () => {
+			try {
+				const response = await readSettingsResponse();
+				await joplin.commands.execute('editor.execCommand', {
+					name: EDITOR_APPLY_SETTINGS_COMMAND,
+					args: [response],
+				});
+			} catch (error) {
+				// editor.execCommand throws when no Markdown editor is focused; the strip re-reads
+				// settings on its next mount anyway, so this is non-fatal.
+				console.warn('[ridgeline] live settings push to editor failed', error);
+			}
+		});
+
+		// A convenience command (menu item + accelerator) that flips the strip side. Handy for the
+		// user and exercised by the live-settings E2E, since changing the setting triggers onChange
+		// above and both surfaces update without a relaunch.
+		await joplin.commands.register({
+			name: TOGGLE_SIDE_COMMAND,
+			label: 'Ridgeline: Toggle strip side (left/right)',
+			execute: async () => {
+				const current = await joplin.settings.value(SETTING_SIDE);
+				await joplin.settings.setValue(SETTING_SIDE, current === 'right' ? 'left' : 'right');
+			},
+		});
+		await joplin.views.menuItems.create(
+			'ridgeline.toggleSide.menu',
+			TOGGLE_SIDE_COMMAND,
+			MenuItemLocation.Tools,
+			{ accelerator: 'Ctrl+Alt+R' },
+		);
 
 		console.info(`[ridgeline] ${PLUGIN_ID} started`);
 	},

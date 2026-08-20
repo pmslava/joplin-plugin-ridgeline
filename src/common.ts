@@ -11,15 +11,23 @@ export const PLUGIN_ID = 'io.github.pmslava.ridgeline';
 export const EDITOR_CONTENT_SCRIPT_ID = 'io.github.pmslava.ridgeline.editorStrip';
 export const VIEWER_CONTENT_SCRIPT_ID = 'io.github.pmslava.ridgeline.viewerStrip';
 
-// CodeMirror command self-registered by the editor content script; the coordinator invokes it via
-// joplin.commands.execute('editor.execCommand', { name: EDITOR_SCROLL_COMMAND, args: [line] }).
+// CodeMirror commands self-registered by the editor content script; the coordinator invokes them via
+// joplin.commands.execute('editor.execCommand', { name, args }).
+//  - EDITOR_SCROLL_COMMAND scrolls the raw editor to a line (jump target).
+//  - EDITOR_APPLY_SETTINGS_COMMAND pushes new settings live (no relaunch) into the mounted strip.
 export const EDITOR_SCROLL_COMMAND = 'ridgeline.scrollToLine';
+export const EDITOR_APPLY_SETTINGS_COMMAND = 'ridgeline.applySettings';
+
+// Plugin command (with menu item + accelerator) that flips the strip side; used to demonstrate and
+// test live settings, and handy for the user.
+export const TOGGLE_SIDE_COMMAND = 'ridgeline.toggleSide';
 
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
 // in a profile's settings.json and survive restarts.
 export const SETTING_SIDE = 'side';
 export const SETTING_EDITOR_MODE = 'editorMode';
 export const SETTING_VIEWER_MODE = 'viewerMode';
+export const SETTING_MAX_DEPTH = 'maxDepth';
 
 export type Side = 'left' | 'right';
 export type PaneMode = 'overlay' | 'reserve';
@@ -28,17 +36,23 @@ export interface RidgelineSettings {
 	side: Side;
 	editorMode: PaneMode;
 	viewerMode: PaneMode;
+	// Deepest heading level shown in the minimap (1-6). Headings deeper than this are omitted.
+	maxDepth: number;
 }
 
 export const DEFAULT_SETTINGS: RidgelineSettings = {
 	side: 'left',
 	editorMode: 'overlay',
 	viewerMode: 'overlay',
+	maxDepth: 6,
 };
 
-// Width of the strip in CSS pixels (matches viewer.css / editor theme). Kept modest for the smoke
-// build; the real minimap will widen on hover.
-export const STRIP_WIDTH_PX = 14;
+// The coordinator's answer to a getSettings request: the resolved settings plus the design tokens.
+// The viewer strip (plain-JS iframe asset that cannot import tokens.ts) reads its tokens from here.
+import type { RidgelineTokens } from './tokens';
+export interface SettingsResponse extends RidgelineSettings {
+	tokens: RidgelineTokens;
+}
 
 // Messages content scripts send to the coordinator (answered by joplin.contentScripts.onMessage).
 export interface GetSettingsMessage {
