@@ -63,9 +63,9 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     expect(box).not.toBeNull();
     expect(editorBox).not.toBeNull();
     if (box && editorBox) {
-      // Narrow vertical strip...
+      // Narrow vertical strip (compact minimap is as wide as the longest H1 bar = 40px)...
       expect(box.width).toBeGreaterThan(6);
-      expect(box.width).toBeLessThan(40);
+      expect(box.width).toBeLessThan(60);
       expect(box.height).toBeGreaterThan(100);
       // ...pinned to the editor's left edge.
       expect(Math.abs(box.x - editorBox.x)).toBeLessThan(6);
@@ -132,7 +132,7 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
 
     const strip = frame.locator('#ridgeline-viewer-strip');
     await expect(strip).toBeAttached({ timeout: 15_000 });
-    expect(await frame.locator('#ridgeline-viewer-strip .ridgeline-tick').count()).toBe(
+    expect(await frame.locator('#ridgeline-viewer-strip .ridgeline-bar').count()).toBe(
       HEADINGS.length
     );
 
@@ -153,7 +153,7 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     // Exactly one strip must exist after the re-render (idempotent rebuild).
     let freshFrame = viewerFrameOrNull(win)!;
     await expect(freshFrame.locator('#ridgeline-viewer-strip')).toHaveCount(1);
-    expect(await freshFrame.locator('#ridgeline-viewer-strip .ridgeline-tick').count()).toBe(
+    expect(await freshFrame.locator('#ridgeline-viewer-strip .ridgeline-bar').count()).toBe(
       HEADINGS.length
     );
 
@@ -169,7 +169,7 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
 
     freshFrame = await ensureViewerVisible(win);
     await expect(freshFrame.locator('#ridgeline-viewer-strip')).toHaveCount(1);
-    await expect(freshFrame.locator('#ridgeline-viewer-strip .ridgeline-tick')).toHaveCount(
+    await expect(freshFrame.locator('#ridgeline-viewer-strip .ridgeline-bar')).toHaveCount(
       HEADINGS.length
     );
   });

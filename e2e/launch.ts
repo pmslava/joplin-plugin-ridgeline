@@ -42,6 +42,7 @@ export interface SeedSettings {
   side?: 'left' | 'right';
   editorMode?: 'overlay' | 'reserve';
   viewerMode?: 'overlay' | 'reserve';
+  maxDepth?: number;
 }
 
 export function assertE2EReady(): void {
@@ -80,6 +81,7 @@ export function createProfile(loadPlugin = true, seed: SeedSettings = {}): strin
   if (seed.side) settings[`${prefix}side`] = seed.side;
   if (seed.editorMode) settings[`${prefix}editorMode`] = seed.editorMode;
   if (seed.viewerMode) settings[`${prefix}viewerMode`] = seed.viewerMode;
+  if (seed.maxDepth != null) settings[`${prefix}maxDepth`] = seed.maxDepth;
 
   fs.writeFileSync(path.join(profileDir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf8');
   return profileDir;

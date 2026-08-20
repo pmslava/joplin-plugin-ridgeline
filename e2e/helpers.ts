@@ -37,6 +37,64 @@ export function buildNoteBody(fillerPerSection = 12): string {
   return lines.join('\n');
 }
 
+/**
+ * A note whose headings span levels H1..H6 (in that order), each followed by filler so the note is
+ * scrollable. Used to exercise level-encoded bar widths, panel indentation, and maxDepth filtering.
+ * Returns the ordered list of { level, text } so specs can assert against it.
+ */
+export const MIXED_HEADINGS: Array<{ level: number; text: string }> = [
+  { level: 1, text: 'Alpha One' },
+  { level: 2, text: 'Bravo Two' },
+  { level: 3, text: 'Charlie Three' },
+  { level: 4, text: 'Delta Four' },
+  { level: 5, text: 'Echo Five' },
+  { level: 6, text: 'Foxtrot Six' },
+];
+
+export function buildMixedNoteBody(fillerPerSection = 6): string {
+  const lines: string[] = [];
+  const lastIndex = MIXED_HEADINGS.length - 1;
+  MIXED_HEADINGS.forEach((h, i) => {
+    lines.push(`${'#'.repeat(h.level)} ${h.text}`);
+    const filler = i === lastIndex ? Math.max(fillerPerSection, 80) : fillerPerSection;
+    for (let n = 0; n < filler; n++) lines.push(`Body ${i + 1} line ${n + 1}.`);
+  });
+  return lines.join('\n');
+}
+
+/**
+ * A note mixing setext headings (=== / ---), ATX headings, and a fenced code block that CONTAINS a
+ * line that looks like an ATX heading. The editor parser and the rendered viewer must agree on the
+ * heading count: 4 real headings, the fenced `# Not A Heading` ignored.
+ */
+export const SETEXT_REAL_HEADING_COUNT = 4;
+export function buildSetextNoteBody(): string {
+  return [
+    'Setext Title', // setext H1 (line 0)
+    '============', // underline (line 1)
+    '',
+    'Body text for the first section so it is a bit taller.',
+    '',
+    'Setext Subtitle', // setext H2
+    '---------------', // underline
+    '',
+    'More body text under the subtitle.',
+    '',
+    '# Real ATX Heading',
+    '',
+    'Text, then a fenced block whose contents must NOT be parsed as a heading:',
+    '',
+    // Tilde fence (not backticks) so typing it into CodeMirror cannot trigger backtick auto-close.
+    '~~~',
+    '# Not A Heading',
+    '~~~',
+    '',
+    '## Another ATX Heading',
+    '',
+    ...Array.from({ length: 80 }, (_, n) => `Trailing line ${n + 1}.`),
+  ].join('\n');
+}
+
 export async function createNotebook(win: Page, name: string): Promise<void> {
   await win.click('.sidebar-header-button.-newfolder');
   await win.waitForTimeout(1200);
@@ -101,8 +159,16 @@ export async function editorScrollTop(win: Page): Promise<number> {
   });
 }
 
+// The current heading is now shown by the bold/white current BAR (no text label in the compact
+// state). Its heading text is carried on the bar's data-text attribute for observability.
 export async function editorCurrentHeading(win: Page): Promise<string> {
-  return (await win.locator(`${EDITOR_STRIP} .ridgeline-current`).textContent()) ?? '';
+  return (
+    (await win
+      .locator(`${EDITOR_STRIP} .ridgeline-bar.is-current`)
+      .first()
+      .getAttribute('data-text')
+      .catch(() => '')) ?? ''
+  );
 }
 
 /**
@@ -136,7 +202,13 @@ export function viewerFrame(win: Page): FrameLocator {
 export async function viewerCurrentHeading(win: Page): Promise<string> {
   const frame = viewerFrameOrNull(win);
   if (!frame) return '';
-  return (await frame.locator('#ridgeline-viewer-strip .ridgeline-current').textContent().catch(() => '')) ?? '';
+  return (
+    (await frame
+      .locator('#ridgeline-viewer-strip .ridgeline-bar.is-current')
+      .first()
+      .getAttribute('data-text')
+      .catch(() => '')) ?? ''
+  );
 }
 
 // Joplin's note viewer scrolls an inner container, not document.scrollingElement, so both reading
