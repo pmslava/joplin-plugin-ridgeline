@@ -10,6 +10,7 @@ import {
   HEADINGS,
   scrollEditorTo,
   scrollViewerTo,
+  selectNoteByTitle,
   viewerCurrentHeading,
   viewerFrameOrNull,
   viewerScrollTop,
@@ -72,6 +73,21 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     }
   });
 
+  // S3 (negative control) — in overlay mode (the default) the strip draws OVER the text, so the
+  // content must NOT carry the reserve padding that reserve mode adds. Complements the positive
+  // reserve-padding assertion in reserve-and-side.spec.ts.
+  test('S3 (negative): overlay mode does not reserve content padding', async () => {
+    const { win } = joplin;
+    const paddingLeft = await win.evaluate(() => {
+      const el = document.querySelector('.cm-content') as HTMLElement | null;
+      if (!el) return -1;
+      return parseFloat(getComputedStyle(el).paddingLeft) || 0;
+    });
+    expect(paddingLeft).toBeGreaterThanOrEqual(0);
+    // Reserve mode would add STRIP_WIDTH_PX (14) + gap (4) = 18px; overlay must stay well below that.
+    expect(paddingLeft).toBeLessThan(14);
+  });
+
   // S2 — current heading is the top-most heading in the viewport, updating live on scroll.
   test('S2: editor current heading tracks the viewport top on scroll', async () => {
     const { win } = joplin;
@@ -79,16 +95,15 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     const atTop = await editorCurrentHeading(win);
     expect(atTop).toBe(HEADINGS[0]); // Introduction
 
-    // Scroll to the bottom; the current heading must change to a later heading.
+    // Scroll to the bottom. The final section is built taller than the viewport, so the last heading
+    // must sit at the top — assert that EXACT heading (poll: the label update is rAF-debounced).
     await win.evaluate(() => {
       const el = document.querySelector('.cm-scroller') as HTMLElement | null;
       if (el) el.scrollTop = el.scrollHeight;
     });
-    await win.waitForTimeout(500);
-
-    const atBottom = await editorCurrentHeading(win);
-    expect(atBottom).not.toBe(atTop);
-    expect(HEADINGS).toContain(atBottom);
+    await expect
+      .poll(() => editorCurrentHeading(win), { timeout: 5_000 })
+      .toBe(HEADINGS[HEADINGS.length - 1]); // Troubleshooting
   });
 
   // S6 (editor) — clicking a strip tick jumps the editor to that heading (full message round-trip).
@@ -110,8 +125,8 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
   });
 
   // S4 — the viewer strip exists inside the rendered note iframe and is rebuilt (not duplicated) when
-  // the note is edited.
-  test('S4: viewer strip is present and survives an edit without duplicating', async () => {
+  // the note is edited OR when switching notes.
+  test('S4: viewer strip survives an edit and a note switch without duplicating', async () => {
     const { win } = joplin;
     const frame = await ensureViewerVisible(win);
 
@@ -121,6 +136,14 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
       HEADINGS.length
     );
 
+    // The strip is pinned to the viewport with position: fixed.
+    expect(
+      await frame.evaluate(() => {
+        const el = document.getElementById('ridgeline-viewer-strip');
+        return el ? getComputedStyle(el).position : '';
+      })
+    ).toBe('fixed');
+
     // Edit the note: type a character into the editor, which forces a viewer re-render.
     await win.locator('.cm-content').first().click();
     await win.keyboard.press('End');
@@ -128,9 +151,25 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     await win.waitForTimeout(1500);
 
     // Exactly one strip must exist after the re-render (idempotent rebuild).
-    const freshFrame = viewerFrameOrNull(win)!;
+    let freshFrame = viewerFrameOrNull(win)!;
     await expect(freshFrame.locator('#ridgeline-viewer-strip')).toHaveCount(1);
     expect(await freshFrame.locator('#ridgeline-viewer-strip .ridgeline-tick').count()).toBe(
+      HEADINGS.length
+    );
+
+    // Switch to a DIFFERENT note (with a different heading count) and back. Each switch re-renders the
+    // viewer; the strip must stay a single instance with the correct per-note tick count — not pile up
+    // duplicates from the previous note's build.
+    await createNoteWithBody(
+      win,
+      'Ridgeline Other Note',
+      ['# Alpha', 'text', '# Beta', 'text', '# Gamma', 'text'].join('\n')
+    );
+    await selectNoteByTitle(win, 'Ridgeline Test Note');
+
+    freshFrame = await ensureViewerVisible(win);
+    await expect(freshFrame.locator('#ridgeline-viewer-strip')).toHaveCount(1);
+    await expect(freshFrame.locator('#ridgeline-viewer-strip .ridgeline-tick')).toHaveCount(
       HEADINGS.length
     );
   });
@@ -143,10 +182,12 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     const atTop = await viewerCurrentHeading(win);
     expect(atTop).toBe(HEADINGS[0]);
 
+    // Scroll to the bottom. The tall final section forces the last heading to the top — assert that
+    // EXACT heading (poll: the label update is rAF-debounced).
     await scrollViewerTo(win, 100000); // scroll to bottom
-    const atBottom = await viewerCurrentHeading(win);
-    expect(atBottom).not.toBe(atTop);
-    expect(HEADINGS).toContain(atBottom);
+    await expect
+      .poll(() => viewerCurrentHeading(win), { timeout: 5_000 })
+      .toBe(HEADINGS[HEADINGS.length - 1]); // Troubleshooting
   });
 
   // S6 (viewer) — clicking a viewer tick jumps the viewer to that heading.

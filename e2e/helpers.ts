@@ -19,13 +19,19 @@ export const HEADINGS = [
 /**
  * Build a Markdown body with the headings above, each followed by filler lines so the note is tall
  * enough that scrolling changes which heading sits at the top of the viewport.
+ *
+ * The FINAL section is made much taller than any plausible editor/viewer viewport (>= 80 lines) so
+ * that scrolling to the very bottom deterministically places the last heading at the top of the
+ * viewport — letting S2/S5 assert the exact bottom-of-scroll heading rather than merely "it changed".
  */
 export function buildNoteBody(fillerPerSection = 12): string {
   const lines: string[] = [];
+  const lastIndex = HEADINGS.length - 1;
   HEADINGS.forEach((h, i) => {
     lines.push(`# ${h}`);
-    for (let n = 0; n < fillerPerSection; n++) {
-      lines.push(`Section ${i + 1} paragraph line ${n + 1} for scrolling.`);
+    const filler = i === lastIndex ? Math.max(fillerPerSection, 80) : fillerPerSection;
+    for (let n = 0; n < filler; n++) {
+      lines.push(`Section ${i + 1} line ${n + 1}.`);
     }
   });
   return lines.join('\n');
@@ -165,4 +171,10 @@ export async function scrollViewerTo(win: Page, top: number): Promise<void> {
 /** Wait for the editor strip to be attached to the DOM. */
 export async function waitForEditorStrip(win: Page): Promise<void> {
   await expect(win.locator(EDITOR_STRIP)).toBeAttached({ timeout: 30_000 });
+}
+
+/** Select the note with the given title in the note list (used to exercise note switching). */
+export async function selectNoteByTitle(win: Page, title: string): Promise<void> {
+  await win.locator('.note-list-item .title span', { hasText: title }).first().click();
+  await win.waitForTimeout(SETTLE);
 }
