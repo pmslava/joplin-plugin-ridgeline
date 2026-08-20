@@ -54,22 +54,29 @@ class EditorStrip {
 	private activeIndex = -1;
 	private rafPending = false;
 	private readonly onScroll: () => void;
+	// Content scripts run in the main renderer's JS realm, so the global `document`/`window` are the
+	// main window's even for a secondary-window editor. Build the strip in the editor's OWN document
+	// (S8) — otherwise a secondary window would get no strip (or one adopted into the wrong doc).
+	private readonly ownerDoc: Document;
+	private readonly ownerWin: Window;
 
 	public constructor(
 		private readonly view: EditorView,
 		private readonly settings: RidgelineSettings,
 		private readonly onJump: (heading: EditorHeading) => void,
 	) {
-		this.container = document.createElement('div');
+		this.ownerDoc = view.scrollDOM.ownerDocument;
+		this.ownerWin = this.ownerDoc.defaultView ?? window;
+		this.container = this.ownerDoc.createElement('div');
 		this.container.className = 'ridgeline-strip ridgeline-editor-strip';
 		this.container.setAttribute('data-side', settings.side);
 		this.container.setAttribute('data-mode', settings.editorMode);
 
-		this.label = document.createElement('div');
+		this.label = this.ownerDoc.createElement('div');
 		this.label.className = 'ridgeline-current';
 		this.container.appendChild(this.label);
 
-		this.ticks = document.createElement('div');
+		this.ticks = this.ownerDoc.createElement('div');
 		this.ticks.className = 'ridgeline-ticks';
 		this.container.appendChild(this.ticks);
 
@@ -142,7 +149,7 @@ class EditorStrip {
 		if (total === 0) return;
 
 		this.headings.forEach((heading, index) => {
-			const tick = document.createElement('button');
+			const tick = this.ownerDoc.createElement('button');
 			tick.className = 'ridgeline-tick';
 			tick.type = 'button';
 			tick.setAttribute('data-index', String(index));
@@ -178,7 +185,7 @@ class EditorStrip {
 	private scheduleUpdate(): void {
 		if (this.rafPending) return;
 		this.rafPending = true;
-		window.requestAnimationFrame(() => {
+		this.ownerWin.requestAnimationFrame(() => {
 			this.rafPending = false;
 			this.update();
 		});
@@ -211,9 +218,6 @@ class EditorStrip {
 
 	public update(): void {
 		const active = this.computeActiveIndex();
-		if (active === this.activeIndex && this.label.textContent) {
-			// still refresh text in case headings changed
-		}
 		this.activeIndex = active;
 
 		if (active < 0) {

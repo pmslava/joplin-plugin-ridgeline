@@ -102,9 +102,11 @@ test.describe('Ridgeline editor + viewer strip (default settings)', () => {
     await win.locator(`[data-testid="ridgeline-editor-tick-${lastIndex}"]`).dispatchEvent('click');
     await expect.poll(() => editorScrollTop(win), { timeout: 10_000 }).toBeGreaterThan(200);
 
-    // And the current-heading label should now reflect a late heading.
-    const heading = await editorCurrentHeading(win);
-    expect(HEADINGS.slice(3)).toContain(heading);
+    // And the current-heading label should settle onto a late heading (poll: the label update is
+    // rAF-debounced, so it lands a frame after the scroll position does).
+    await expect
+      .poll(async () => HEADINGS.slice(3).includes(await editorCurrentHeading(win)), { timeout: 5_000 })
+      .toBe(true);
   });
 
   // S4 — the viewer strip exists inside the rendered note iframe and is rebuilt (not duplicated) when

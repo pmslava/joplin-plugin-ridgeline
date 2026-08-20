@@ -40,22 +40,38 @@ export async function createNotebook(win: Page, name: string): Promise<void> {
 }
 
 /**
- * Create a new note, type its title, then type a Markdown body into the CodeMirror editor.
+ * Create a new note, set its title, then type a Markdown body into the CodeMirror editor.
+ *
+ * The title and body are filled separately with focus verified before typing the body: on "New
+ * note" Joplin focuses the title input, and typing the body without first moving focus into the
+ * editor leaks the leading characters into the title (which then corrupts the first heading).
  * Leaves the note open in the editor.
  */
 export async function createNoteWithBody(win: Page, title: string, body: string): Promise<void> {
   await win.locator('button:has-text("New note")').first().click();
   await win.waitForTimeout(SETTLE);
-  await win.keyboard.type(title);
-  await win.waitForTimeout(SETTLE);
 
-  // Move into the Markdown editor body and type the content.
-  const content = win.locator('.cm-content').first();
-  await content.click();
+  // Set the title via the title input directly.
+  const titleInput = win.locator('input.title-input');
+  await titleInput.click();
+  await titleInput.fill(title);
   await win.waitForTimeout(200);
+
+  // Focus the editor body and CONFIRM the caret is inside the CodeMirror editor before typing.
+  await win.locator('.cm-content').first().click();
+  await win
+    .waitForFunction(
+      () => {
+        const ae = document.activeElement as HTMLElement | null;
+        return !!ae && !!ae.closest('.cm-editor');
+      },
+      undefined,
+      { timeout: 5000 }
+    )
+    .catch(() => {});
   await win.keyboard.type(body);
   await win.waitForTimeout(SETTLE);
-  // Return the caret to the top so the first heading is the current one initially.
+  // Return the viewport to the top so the first heading is the current one initially.
   await scrollEditorTo(win, 0);
 }
 
@@ -117,27 +133,32 @@ export async function viewerCurrentHeading(win: Page): Promise<string> {
   return (await frame.locator('#ridgeline-viewer-strip .ridgeline-current').textContent().catch(() => '')) ?? '';
 }
 
+// Joplin's note viewer scrolls an inner container, not document.scrollingElement, so both reading
+// and setting the scroll position must target whichever element actually overflows. Pick the element
+// (including documentElement/body) with the largest scrollable delta.
+const FIND_SCROLLER = `
+  (function () {
+    var best = document.scrollingElement || document.documentElement;
+    var bestDelta = (best ? best.scrollHeight - best.clientHeight : 0);
+    var els = document.querySelectorAll('*');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      var delta = el.scrollHeight - el.clientHeight;
+      if (delta > bestDelta) { bestDelta = delta; best = el; }
+    }
+    return best;
+  })()`;
+
 export async function viewerScrollTop(win: Page): Promise<number> {
   const frame = viewerFrameOrNull(win);
   if (!frame) return -1;
-  return frame.evaluate(() => {
-    return (
-      window.pageYOffset ||
-      (document.documentElement && document.documentElement.scrollTop) ||
-      (document.body && document.body.scrollTop) ||
-      0
-    );
-  });
+  return frame.evaluate(`(function(){ var s = ${FIND_SCROLLER}; return s ? s.scrollTop : 0; })()`) as Promise<number>;
 }
 
 export async function scrollViewerTo(win: Page, top: number): Promise<void> {
   const frame = viewerFrameOrNull(win);
   if (!frame) return;
-  await frame.evaluate((y) => {
-    const el = (document.scrollingElement || document.documentElement) as HTMLElement;
-    el.scrollTop = y;
-    window.scrollTo(0, y);
-  }, top);
+  await frame.evaluate(`(function(){ var s = ${FIND_SCROLLER}; if (s) s.scrollTop = ${Math.floor(top)}; })()`);
   await win.waitForTimeout(400);
 }
 
