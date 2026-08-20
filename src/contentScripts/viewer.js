@@ -17,19 +17,24 @@
 	var STRIP_ID = 'ridgeline-viewer-strip';
 	var TOP_EDGE_TOLERANCE_PX = 4;
 
+	// Fallback only — the real tokens arrive from the coordinator (settings.tokens). Kept in sync with
+	// src/tokens.ts so a failed round-trip still looks right.
 	var FALLBACK_TOKENS = {
-		levelLengths: { 1: 40, 2: 30, 3: 22, 4: 19, 5: 17, 6: 15 },
+		levelLengths: { 1: 40, 2: 35, 3: 30, 4: 25, 5: 20, 6: 15 },
 		barHeight: 2,
-		currentBarHeight: 3,
+		currentBarHeight: 4,
+		currentBarLengthBoostPx: 5,
 		barGap: 7,
 		minBarGap: 1,
 		normalOpacity: 0.45,
 		edgeGapPx: 2,
+		stripTopOffsetPx: 6,
 		panelFontPx: 12.5,
 		panelIndentPx: 12,
 		panelPaddingPx: 8,
 		panelRowPaddingPx: 3,
-		panelMaxWidth: 260,
+		panelMaxWidth: 320,
+		panelMaxWidthFraction: 0.6,
 		panelGapPx: 0,
 		hoverGraceMs: 200,
 		pollMs: 700,
@@ -98,7 +103,16 @@
 			panelBg: rgb(bg),
 			panelFg: rgba(fg, 0.75),
 			panelBorder: rgba(fg, 0.18),
+			rowHover: rgba(fg, isDark ? 0.16 : 0.1),
 		};
+	}
+
+	function panelMaxWidthPx() {
+		var el = document.scrollingElement || document.documentElement;
+		var paneWidth = el ? (el.clientWidth || 0) : 0;
+		var frac = tokens.panelMaxWidthFraction || FALLBACK_TOKENS.panelMaxWidthFraction;
+		var fractionCap = paneWidth > 0 ? Math.floor(paneWidth * frac) : tokens.panelMaxWidth;
+		return Math.max(140, Math.min(tokens.panelMaxWidth, fractionCap));
 	}
 
 	function verticalScrollbarWidth() {
@@ -148,6 +162,11 @@
 		else document.body.style.marginLeft = pad;
 	}
 
+	function pointInRect(x, y, rect, pad) {
+		if (pad == null) pad = 2;
+		return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
+	}
+
 	function computeActiveIndex(headings) {
 		if (!headings.length) return -1;
 		var active = 0;
@@ -171,8 +190,8 @@
 	function teardown() {
 		if (!strip) return;
 		if (strip.scrollHandler) window.removeEventListener('scroll', strip.scrollHandler, true);
-		if (strip.enter) strip.el.removeEventListener('mouseenter', strip.enter);
-		if (strip.leave) strip.el.removeEventListener('mouseleave', strip.leave);
+		if (strip.pointermove) document.removeEventListener('mousemove', strip.pointermove);
+		if (strip.docleave) document.removeEventListener('mouseleave', strip.docleave);
 		if (strip.keydown) window.removeEventListener('keydown', strip.keydown);
 		if (strip.collapseTimer) clearTimeout(strip.collapseTimer);
 		if (strip.el && strip.el.parentNode) strip.el.parentNode.removeChild(strip.el);
@@ -197,16 +216,20 @@
 		el.setAttribute('data-mode', settings.viewerMode);
 		var s = el.style;
 		s.position = 'fixed';
+		// R1: anchor the stack to the TOP of the pane (small offset), not vertically centred.
 		s.top = '0';
 		s.bottom = '0';
+		s.paddingTop = tokens.stripTopOffsetPx + 'px';
 		s.width = stripWidth() + 'px';
 		s.zIndex = '2147483000';
 		s.display = 'flex';
 		s.flexDirection = 'column';
-		s.justifyContent = 'center';
-		s.alignItems = side === 'right' ? 'flex-end' : 'flex-start';
+		s.justifyContent = 'flex-start';
+		// R2: bars flush to the right edge on BOTH sides.
+		s.alignItems = 'flex-end';
 		s.background = 'transparent';
-		s.cursor = 'pointer';
+		// R6: the full-height container must NOT capture pointer events; only the bars + panel do.
+		s.pointerEvents = 'none';
 		if (side === 'right') { s.right = verticalScrollbarWidth() + 'px'; s.left = ''; }
 		else { s.left = '0'; s.right = ''; }
 
@@ -215,11 +238,14 @@
 		var bw = barsWrap.style;
 		bw.display = 'flex';
 		bw.flexDirection = 'column';
-		bw.alignItems = side === 'right' ? 'flex-end' : 'flex-start';
+		bw.alignItems = 'flex-end';
 		bw.rowGap = currentGap(count) + 'px';
 		bw.overflow = 'hidden';
 		bw.maxHeight = '100%';
 		bw.width = '100%';
+		// R6: the bar stack is the hover trigger zone and is interactive.
+		bw.pointerEvents = 'auto';
+		bw.cursor = 'pointer';
 		el.appendChild(barsWrap);
 
 		var panel = document.createElement('div');
@@ -233,16 +259,22 @@
 		p.overflowX = 'hidden';
 		p.boxSizing = 'border-box';
 		p.padding = tokens.panelPaddingPx + 'px';
+		// R4: size to the longest row up to a cap; wrap beyond it (no ellipsis).
+		p.width = 'max-content';
 		p.minWidth = '140px';
-		p.maxWidth = tokens.panelMaxWidth + 'px';
+		p.maxWidth = panelMaxWidthPx() + 'px';
 		p.background = colors.panelBg;
 		p.color = colors.panelFg;
 		p.border = '1px solid ' + colors.panelBorder;
 		p.borderRadius = '4px';
 		p.boxShadow = '0 2px 10px rgba(0,0,0,0.25)';
 		p.zIndex = '6';
-		if (side === 'right') { p.right = 'calc(100% + ' + tokens.panelGapPx + 'px)'; p.left = ''; }
-		else { p.left = 'calc(100% + ' + tokens.panelGapPx + 'px)'; p.right = ''; }
+		// R6: the open panel is interactive.
+		p.pointerEvents = 'auto';
+		// R4: anchor the panel at the PANE EDGE so it draws OVER the compact strip (and the note),
+		// rather than beside the strip leaving it visible.
+		if (side === 'right') { p.right = '0'; p.left = ''; }
+		else { p.left = '0'; p.right = ''; }
 		el.appendChild(panel);
 
 		var bars = [];
@@ -283,15 +315,23 @@
 			row.textContent = text;
 			var r = row.style;
 			r.fontSize = tokens.panelFontPx + 'px';
-			r.lineHeight = '1.5';
+			r.lineHeight = '1.4';
 			r.padding = tokens.panelRowPaddingPx + 'px 6px';
 			r.paddingLeft = (tokens.panelPaddingPx + (level - 1) * tokens.panelIndentPx) + 'px';
 			r.color = colors.panelFg;
-			r.whiteSpace = 'nowrap';
-			r.overflow = 'hidden';
-			r.textOverflow = 'ellipsis';
+			// R4: wrap long headings instead of trimming with an ellipsis.
+			r.whiteSpace = 'normal';
+			r.overflowWrap = 'anywhere';
+			// R5: rows read as clickable — pointer cursor + a hover background (see also viewer.css).
 			r.cursor = 'pointer';
 			r.borderRadius = '3px';
+			r.transition = 'background-color 80ms ease';
+			row.addEventListener('mouseenter', function () {
+				if (!row.classList.contains('is-current')) row.style.background = colors.rowHover;
+			});
+			row.addEventListener('mouseleave', function () {
+				row.style.background = '';
+			});
 			row.addEventListener('click', function (event) {
 				event.preventDefault();
 				event.stopPropagation();
@@ -316,8 +356,11 @@
 			for (var i = 0; i < bars.length; i++) {
 				var isCur = i === active;
 				bars[i].classList.toggle('is-current', isCur);
+				// R3: the current bar is clearly bolder — brighter, thicker, AND a touch longer.
 				bars[i].style.background = isCur ? colors.currentBar : colors.normalBar;
 				bars[i].style.height = (isCur ? tokens.currentBarHeight : tokens.barHeight) + 'px';
+				var lvl = Number(headings[i].tagName.substring(1));
+				bars[i].style.width = (tokenLength(lvl) + (isCur ? (tokens.currentBarLengthBoostPx || 0) : 0)) + 'px';
 				if (isCur) bars[i].setAttribute('data-current', 'true');
 				else bars[i].removeAttribute('data-current');
 			}
@@ -355,22 +398,32 @@
 			panel.style.display = 'none';
 			el.setAttribute('data-expanded', 'false');
 		}
-		var enter = function () { expand(); };
-		var leave = function () {
+		function scheduleCollapse() {
 			if (collapseTimer) clearTimeout(collapseTimer);
 			collapseTimer = setTimeout(function () { collapseTimer = null; collapse(); }, tokens.hoverGraceMs);
 			if (strip) strip.collapseTimer = collapseTimer;
+		}
+		// R6/R7: the hover trigger is the bar stack's actual bounding box (plus the open panel), tested
+		// on a document-level mousemove — which keeps firing while a mouse BUTTON is held, so dragging a
+		// text selection onto the minimap still opens the TOC.
+		var pointermove = function (event) {
+			if (count === 0) return;
+			var overBars = pointInRect(event.clientX, event.clientY, barsWrap.getBoundingClientRect());
+			var overPanel = expanded && pointInRect(event.clientX, event.clientY, panel.getBoundingClientRect());
+			if (overBars || overPanel) expand();
+			else if (expanded) scheduleCollapse();
 		};
+		var docleave = function () { if (expanded) scheduleCollapse(); };
 		var keydown = function (event) { if (event.key === 'Escape' && expanded) collapse(); };
-		el.addEventListener('mouseenter', enter);
-		el.addEventListener('mouseleave', leave);
+		document.addEventListener('mousemove', pointermove, { passive: true });
+		document.addEventListener('mouseleave', docleave);
 		window.addEventListener('keydown', keydown);
 
 		document.body.appendChild(el);
 		applyReserveMargin();
 		updateActive();
 
-		strip = { el: el, scrollHandler: scrollHandler, enter: enter, leave: leave, keydown: keydown, collapseTimer: collapseTimer };
+		strip = { el: el, scrollHandler: scrollHandler, pointermove: pointermove, docleave: docleave, keydown: keydown, collapseTimer: collapseTimer };
 	}
 
 	function jump(anchor) {

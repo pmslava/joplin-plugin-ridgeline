@@ -4,7 +4,17 @@ import { Page, Frame, FrameLocator, expect } from '@playwright/test';
 export const SETTLE = 800;
 
 export const EDITOR_STRIP = '.ridgeline-editor-strip';
+export const EDITOR_BARS = '.ridgeline-editor-strip .ridgeline-bars';
 export const VIEWER_IFRAME = 'iframe.noteTextViewer';
+
+/**
+ * Open the editor's hover TOC by moving the pointer over the COMPACT BAR STACK (the `.ridgeline-bars`
+ * box), which is the real hover trigger zone. The strip container is full-height but no longer
+ * captures hover (R6), so hovering its centre would not expand the panel — hover the bars.
+ */
+export async function hoverEditorBars(win: Page): Promise<void> {
+  await win.locator(EDITOR_BARS).first().hover();
+}
 
 /** Distinct heading titles used by the test note, in document order. */
 export const HEADINGS = [

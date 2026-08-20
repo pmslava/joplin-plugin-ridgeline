@@ -8,11 +8,15 @@
 // edit — here.
 
 export interface RidgelineTokens {
-	// Bar LENGTH (px) by heading level. Diminishes clearly H1→H3, then only subtly after H3.
+	// Bar LENGTH (px) by heading level. With only six levels a LINEAR progression (equal decrements)
+	// keeps every adjacent pair of levels equally distinguishable — 40/35/30/25/20/15, a 5px step.
 	levelLengths: { [level: number]: number };
-	// Bar thickness (px) for a normal bar and for the current-section bar.
+	// Bar thickness (px) for a normal bar and for the (clearly bolder) current-section bar.
 	barHeight: number;
 	currentBarHeight: number;
+	// Extra length (px) added to the CURRENT bar on top of its per-level length, so "where am I" is
+	// instantly visible (bolder = thicker + brighter + a touch longer).
+	currentBarLengthBoostPx: number;
 	// Vertical gap (px) between stacked bars, and the floor it may be compressed to when a note has
 	// so many headings the stack would overflow the pane.
 	barGap: number;
@@ -21,12 +25,15 @@ export interface RidgelineTokens {
 	normalOpacity: number;
 	// Small inset (px) from the pane edge the strip sits on.
 	edgeGapPx: number;
+	// Small offset (px) from the pane's TOP edge; the bar stack anchors to the top, not the centre.
+	stripTopOffsetPx: number;
 	// Hover-expanded TOC panel.
 	panelFontPx: number; // row font size
 	panelIndentPx: number; // extra left indent per heading level
 	panelPaddingPx: number; // panel inner padding
 	panelRowPaddingPx: number; // per-row vertical padding
-	panelMaxWidth: number; // panel max width (px); it scrolls if content is taller than the pane
+	panelMaxWidth: number; // panel max width (px) — a hard cap; see panelMaxWidthFraction too
+	panelMaxWidthFraction: number; // panel max width also capped to this fraction of the pane width
 	panelGapPx: number; // gap between the compact strip and the panel
 	// Grace period (ms) before the panel collapses after the pointer leaves, so crossing the
 	// strip↔panel boundary does not flicker it shut.
@@ -37,18 +44,21 @@ export interface RidgelineTokens {
 }
 
 export const DESIGN_TOKENS: RidgelineTokens = {
-	levelLengths: { 1: 40, 2: 30, 3: 22, 4: 19, 5: 17, 6: 15 },
+	levelLengths: { 1: 40, 2: 35, 3: 30, 4: 25, 5: 20, 6: 15 },
 	barHeight: 2,
-	currentBarHeight: 3,
+	currentBarHeight: 4,
+	currentBarLengthBoostPx: 5,
 	barGap: 7,
 	minBarGap: 1,
 	normalOpacity: 0.45,
 	edgeGapPx: 2,
+	stripTopOffsetPx: 6,
 	panelFontPx: 12.5,
 	panelIndentPx: 12,
 	panelPaddingPx: 8,
 	panelRowPaddingPx: 3,
-	panelMaxWidth: 260,
+	panelMaxWidth: 320,
+	panelMaxWidthFraction: 0.6,
 	panelGapPx: 0,
 	hoverGraceMs: 200,
 	pollMs: 700,

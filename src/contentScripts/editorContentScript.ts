@@ -75,6 +75,7 @@ interface SurfaceColors {
 	panelBg: string;
 	panelFg: string;
 	panelBorder: string;
+	rowHover: string;
 }
 
 function reserveTheme(
@@ -107,8 +108,8 @@ class EditorStrip {
 	private readonly onScroll: () => void;
 	private readonly onResize: () => void;
 	private readonly onKeyDown: (event: KeyboardEvent) => void;
-	private readonly onEnter: () => void;
-	private readonly onLeave: () => void;
+	private readonly onPointerMove: (event: MouseEvent) => void;
+	private readonly onDocLeave: () => void;
 	// Content scripts run in the main renderer's JS realm, so the global `document`/`window` are the
 	// main window's even for a secondary-window editor. Build the strip in the editor's OWN document
 	// — otherwise a secondary window would get no strip (or one adopted into the wrong doc).
@@ -150,10 +151,14 @@ class EditorStrip {
 		};
 		this.ownerWin.addEventListener('resize', this.onResize, { passive: true });
 
-		this.onEnter = () => this.expand();
-		this.onLeave = () => this.scheduleCollapse();
-		this.container.addEventListener('mouseenter', this.onEnter);
-		this.container.addEventListener('mouseleave', this.onLeave);
+		// R6/R7: the hover trigger is the bar stack's actual bounding box (plus the open panel), not the
+		// full-height container. We hit-test the pointer against those rects on a document-level
+		// mousemove — which keeps firing even while a mouse BUTTON is held (a text-selection drag), so
+		// dragging a selection onto the minimap still opens the TOC.
+		this.onPointerMove = (event: MouseEvent) => this.handlePointerMove(event.clientX, event.clientY);
+		this.ownerDoc.addEventListener('mousemove', this.onPointerMove, { passive: true });
+		this.onDocLeave = () => this.scheduleCollapse();
+		this.ownerDoc.addEventListener('mouseleave', this.onDocLeave);
 
 		this.onKeyDown = (event: KeyboardEvent) => {
 			if (event.key === 'Escape' && this.expanded) this.collapse();
@@ -191,20 +196,23 @@ class EditorStrip {
 			panelBg: rgbString(bg),
 			panelFg: rgbaString(fg, 0.75),
 			panelBorder: rgbaString(fg, 0.18),
+			// Row hover highlight: a faint wash of the foreground, readable on either theme.
+			rowHover: rgbaString(fg, isDark ? 0.16 : 0.1),
 		};
 	}
 
 	private refreshSidePosition(): void {
 		const s = this.container.style;
+		// Bars are RIGHT-aligned within the strip on BOTH sides (flush right edge, ragged left).
+		this.container.setAttribute('data-side', this.settings.side);
 		if (this.settings.side === 'right') {
 			s.right = `${this.measureScrollbarWidth()}px`;
 			s.left = '';
-			this.container.style.alignItems = 'flex-end';
 		} else {
 			s.left = '0';
 			s.right = '';
-			this.container.style.alignItems = 'flex-start';
 		}
+		this.container.style.alignItems = 'flex-end';
 	}
 
 	private applyBaseStyle(): void {
@@ -213,16 +221,20 @@ class EditorStrip {
 
 		const s = this.container.style;
 		s.position = 'absolute';
+		// R1: anchor the stack to the TOP of the pane (small offset), not vertically centred.
 		s.top = '0';
 		s.bottom = '0';
+		s.paddingTop = `${this.tokens.stripTopOffsetPx}px`;
 		s.width = `${stripWidth(this.tokens)}px`;
 		s.zIndex = '5';
 		s.boxSizing = 'border-box';
 		s.background = 'transparent';
 		s.display = 'flex';
 		s.flexDirection = 'column';
-		s.justifyContent = 'center';
-		s.cursor = 'pointer';
+		s.justifyContent = 'flex-start';
+		// R6: the full-height container must NOT capture pointer events (it would swallow hover/clicks
+		// over the text in the empty band). Only the bar stack and the open panel are interactive.
+		s.pointerEvents = 'none';
 		s.overflow = 'visible';
 
 		const bw = this.barsWrap.style;
@@ -231,9 +243,20 @@ class EditorStrip {
 		bw.overflow = 'hidden';
 		bw.maxHeight = '100%';
 		bw.width = '100%';
+		// R2: bars flush to the right edge of the strip. R6: the bar stack is the hover trigger zone.
+		bw.alignItems = 'flex-end';
+		bw.pointerEvents = 'auto';
+		bw.cursor = 'pointer';
 
 		this.refreshSidePosition();
 		this.stylePanelShell();
+	}
+
+	// The longest panel width we allow: a hard token cap, also limited to a fraction of the pane width.
+	private panelMaxWidthPx(): number {
+		const paneWidth = this.view.scrollDOM.clientWidth || 0;
+		const fractionCap = paneWidth > 0 ? Math.floor(paneWidth * this.tokens.panelMaxWidthFraction) : this.tokens.panelMaxWidth;
+		return Math.max(140, Math.min(this.tokens.panelMaxWidth, fractionCap));
 	}
 
 	private stylePanelShell(): void {
@@ -245,19 +268,26 @@ class EditorStrip {
 		p.overflowX = 'hidden';
 		p.boxSizing = 'border-box';
 		p.padding = `${this.tokens.panelPaddingPx}px`;
+		// R4: size to the longest row (max-content) up to a cap; beyond the cap rows WRAP (see
+		// renderPanel) rather than being trimmed with an ellipsis.
+		p.width = 'max-content';
 		p.minWidth = '140px';
-		p.maxWidth = `${this.tokens.panelMaxWidth}px`;
+		p.maxWidth = `${this.panelMaxWidthPx()}px`;
 		p.background = this.colors.panelBg;
 		p.color = this.colors.panelFg;
 		p.border = `1px solid ${this.colors.panelBorder}`;
 		p.borderRadius = '4px';
 		p.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.25)';
 		p.zIndex = '6';
+		// R6: the open panel is interactive (its rows are clickable and part of the hover zone).
+		p.pointerEvents = 'auto';
+		// R4: the panel is anchored at the PANE EDGE and draws OVER the compact strip (and onward over
+		// the text), rather than beside the strip leaving it visible.
 		if (this.settings.side === 'right') {
-			p.right = `calc(100% + ${this.tokens.panelGapPx}px)`;
+			p.right = '0';
 			p.left = '';
 		} else {
-			p.left = `calc(100% + ${this.tokens.panelGapPx}px)`;
+			p.left = '0';
 			p.right = '';
 		}
 	}
@@ -290,7 +320,8 @@ class EditorStrip {
 
 	private layoutBars(): void {
 		this.barsWrap.style.rowGap = `${this.currentGap()}px`;
-		this.barsWrap.style.alignItems = this.settings.side === 'right' ? 'flex-end' : 'flex-start';
+		// R2: bars are always right-aligned (flush right edge, ragged left) regardless of side.
+		this.barsWrap.style.alignItems = 'flex-end';
 	}
 
 	private renderBars(): void {
@@ -344,16 +375,24 @@ class EditorStrip {
 
 			const r = row.style;
 			r.fontSize = `${this.tokens.panelFontPx}px`;
-			r.lineHeight = '1.5';
+			r.lineHeight = '1.4';
 			r.padding = `${this.tokens.panelRowPaddingPx}px 6px`;
 			r.paddingLeft = `${this.tokens.panelPaddingPx + (heading.level - 1) * this.tokens.panelIndentPx}px`;
 			r.color = this.colors.panelFg;
-			r.whiteSpace = 'nowrap';
-			r.overflow = 'hidden';
-			r.textOverflow = 'ellipsis';
+			// R4: never truncate — wrap long headings instead of trimming with an ellipsis.
+			r.whiteSpace = 'normal';
+			r.overflowWrap = 'anywhere';
+			// R5: rows read as clickable — pointer cursor, and a background change on hover.
 			r.cursor = 'pointer';
 			r.borderRadius = '3px';
+			r.transition = 'background-color 80ms ease';
 
+			row.addEventListener('mouseenter', () => {
+				if (!row.classList.contains('is-current')) row.style.background = this.colors.rowHover;
+			});
+			row.addEventListener('mouseleave', () => {
+				row.style.background = '';
+			});
 			row.addEventListener('click', (event) => {
 				event.preventDefault();
 				event.stopPropagation();
@@ -418,8 +457,11 @@ class EditorStrip {
 			const bar = this.bars[i];
 			const isCurrent = i === active;
 			bar.classList.toggle('is-current', isCurrent);
+			// R3: the current bar is clearly bolder — brighter, thicker, AND a touch longer.
 			bar.style.background = isCurrent ? this.colors.currentBar : this.colors.normalBar;
 			bar.style.height = `${isCurrent ? this.tokens.currentBarHeight : this.tokens.barHeight}px`;
+			const baseLen = barLengthFor(this.tokens, this.headings[i].level);
+			bar.style.width = `${baseLen + (isCurrent ? this.tokens.currentBarLengthBoostPx : 0)}px`;
 			if (isCurrent) bar.setAttribute('data-current', 'true');
 			else bar.removeAttribute('data-current');
 		}
@@ -431,6 +473,22 @@ class EditorStrip {
 			row.style.fontWeight = isCurrent ? '700' : '400';
 			row.style.color = isCurrent ? this.colors.currentBar : this.colors.panelFg;
 		}
+	}
+
+	// Is the point within a rect (with a small tolerance so the strip↔panel seam never gaps)?
+	private pointInRect(x: number, y: number, rect: DOMRect, pad = 2): boolean {
+		return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
+	}
+
+	// R6/R7 hover driver: expand while the pointer is over the bar stack (or the open panel), collapse
+	// otherwise. Geometry-based so it works during a button-held selection drag, and so the empty
+	// full-height band neither triggers nor blocks anything.
+	private handlePointerMove(x: number, y: number): void {
+		if (this.headings.length === 0) return;
+		const overBars = this.pointInRect(x, y, this.barsWrap.getBoundingClientRect());
+		const overPanel = this.expanded && this.pointInRect(x, y, this.panel.getBoundingClientRect());
+		if (overBars || overPanel) this.expand();
+		else if (this.expanded) this.scheduleCollapse();
 	}
 
 	private expand(): void {
@@ -476,8 +534,8 @@ class EditorStrip {
 		this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
 		this.ownerWin.removeEventListener('resize', this.onResize);
 		this.ownerWin.removeEventListener('keydown', this.onKeyDown);
-		this.container.removeEventListener('mouseenter', this.onEnter);
-		this.container.removeEventListener('mouseleave', this.onLeave);
+		this.ownerDoc.removeEventListener('mousemove', this.onPointerMove);
+		this.ownerDoc.removeEventListener('mouseleave', this.onDocLeave);
 		if (this.collapseTimer !== null) this.ownerWin.clearTimeout(this.collapseTimer);
 		this.container.remove();
 	}

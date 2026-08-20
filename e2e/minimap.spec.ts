@@ -8,11 +8,10 @@ import {
   editorCurrentHeading,
   editorScrollTop,
   ensureViewerVisible,
+  hoverEditorBars,
   MIXED_HEADINGS,
   scrollEditorTo,
-  selectNoteByTitle,
   SETEXT_REAL_HEADING_COUNT,
-  viewerCurrentHeading,
   waitForEditorStrip,
   EDITOR_STRIP,
 } from './helpers';
@@ -36,33 +35,47 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     if (joplin) await closeJoplin(joplin);
   });
 
-  async function editorBarWidths(): Promise<number[]> {
+  // The current-section bar carries a small length boost (R3, currentBarLengthBoostPx in tokens), so
+  // its rendered width is longer than its pure level width. Normalise that out to validate the
+  // per-level (base) length encoding.
+  const CURRENT_BAR_LENGTH_BOOST = 5;
+
+  // Returns the BASE bar length per bar (rendered width minus the current-bar boost, if current).
+  async function editorBaseBarWidths(): Promise<number[]> {
     const { win } = joplin;
     const bars = win.locator(`${EDITOR_STRIP} .ridgeline-bar`);
     const count = await bars.count();
     const widths: number[] = [];
     for (let i = 0; i < count; i++) {
       const box = await bars.nth(i).boundingBox();
-      widths.push(box ? box.width : -1);
+      const isCurrent = (await bars.nth(i).getAttribute('class'))?.includes('is-current') ?? false;
+      widths.push(box ? box.width - (isCurrent ? CURRENT_BAR_LENGTH_BOOST : 0) : -1);
     }
     return widths;
   }
 
-  // D1 — one bar per heading, lengths strictly diminishing by heading level (H1 longest → H6
-  // shortest) per the shared design tokens (40,30,22,19,17,15).
-  test('bar count matches headings and widths are strictly ordered by level', async () => {
+  // D1/R9 — one bar per heading, base lengths diminishing LINEARLY by heading level (H1 longest → H6
+  // shortest) per the shared design tokens (40/35/30/25/20/15 — an equal 5px step per level).
+  test('bar count matches headings and widths are linearly ordered by level', async () => {
+    await scrollEditorTo(joplin.win, 0);
     expect(await joplin.win.locator(`${EDITOR_STRIP} .ridgeline-bar`).count()).toBe(
       MIXED_HEADINGS.length
     );
-    const widths = await editorBarWidths();
+    const widths = await editorBaseBarWidths();
     expect(widths.length).toBe(MIXED_HEADINGS.length);
     for (let i = 1; i < widths.length; i++) {
-      // Each deeper level's bar is strictly shorter than the one above it.
+      // Each deeper level's base bar is strictly shorter than the one above it.
       expect(widths[i - 1]).toBeGreaterThan(widths[i]);
     }
     // Sanity-check the extremes against the tokens (H1 = 40, H6 = 15).
     expect(Math.round(widths[0])).toBe(40);
     expect(Math.round(widths[widths.length - 1])).toBe(15);
+    // R9: the decrements are EQUAL (linear), so every adjacent pair is equally distinguishable. Each
+    // step is ~5px; assert they match within 1px of each other.
+    const steps = widths.slice(1).map((w, i) => widths[i] - w);
+    const minStep = Math.min(...steps);
+    const maxStep = Math.max(...steps);
+    expect(maxStep - minStep).toBeLessThanOrEqual(1);
   });
 
   // D1 — the current bar (bold/tall + is-current) moves as the viewport top passes headings.
@@ -89,7 +102,7 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     const { win } = joplin;
     await scrollEditorTo(win, 0); // current heading = first
     const strip = win.locator(EDITOR_STRIP);
-    await strip.hover();
+    await hoverEditorBars(win);
 
     await expect.poll(() => strip.getAttribute('data-expanded'), { timeout: 5_000 }).toBe('true');
     const panel = win.locator(`${EDITOR_STRIP} .ridgeline-panel`);
@@ -128,7 +141,7 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     expect(await editorScrollTop(win)).toBeLessThan(20);
 
     const lastIndex = MIXED_HEADINGS.length - 1;
-    await win.locator(EDITOR_STRIP).hover();
+    await hoverEditorBars(win);
     await win.locator(`[data-testid="ridgeline-editor-row-${lastIndex}"]`).dispatchEvent('click');
     await expect.poll(() => editorScrollTop(win), { timeout: 10_000 }).toBeGreaterThan(200);
     await win.mouse.move(600, 400);
@@ -138,7 +151,7 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
   test('panel collapses on mouseleave', async () => {
     const { win } = joplin;
     const strip = win.locator(EDITOR_STRIP);
-    await strip.hover();
+    await hoverEditorBars(win);
     await expect.poll(() => strip.getAttribute('data-expanded'), { timeout: 5_000 }).toBe('true');
 
     // Move well away from the strip; after the ~200ms grace it must collapse.
