@@ -158,6 +158,35 @@ export async function createNoteWithBody(win: Page, title: string, body: string)
   await scrollEditorTo(win, 0);
 }
 
+/**
+ * Like createNoteWithBody, but inserts the body with keyboard.insertText — a single input event
+ * rather than per-key typing. CodeMirror's Enter keymap (and its auto-indent) never fires, so exact
+ * leading whitespace on a line (e.g. a leading-space ATX heading " # Title") is preserved verbatim.
+ * createNoteWithBody's keyboard.type would let auto-indent alter that whitespace.
+ */
+export async function createNoteWithExactBody(win: Page, title: string, body: string): Promise<void> {
+  await win.locator('button:has-text("New note")').first().click();
+  await win.waitForTimeout(SETTLE);
+  const titleInput = win.locator('input.title-input');
+  await titleInput.click();
+  await titleInput.fill(title);
+  await win.waitForTimeout(200);
+  await win.locator('.cm-content').first().click();
+  await win
+    .waitForFunction(
+      () => {
+        const ae = document.activeElement as HTMLElement | null;
+        return !!ae && !!ae.closest('.cm-editor');
+      },
+      undefined,
+      { timeout: 5000 }
+    )
+    .catch(() => {});
+  await win.keyboard.insertText(body);
+  await win.waitForTimeout(SETTLE);
+  await scrollEditorTo(win, 0);
+}
+
 /** The CodeMirror scroller element in the main window. */
 export function editorScroller(win: Page) {
   return win.locator('.cm-scroller').first();

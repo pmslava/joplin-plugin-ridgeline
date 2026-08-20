@@ -11,3 +11,7 @@ playwright-report/
 
 # Local E2E run logs
 e2e-run*.log
+
+# Temporary P1 reproduction harness (never commit — reads private profile)
+e2e/_repro*.spec.ts
+e2e/_fullfidelity*.ts
