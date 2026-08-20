@@ -30,12 +30,18 @@ import {
  * below: when an artificial per-level shift is injected it is detected; with only Ridgeline active the
  * offsets are zero.
  *
- * ROUND-2 UPDATE (P1): the user's shift was finally reproduced — its trigger is a LEADING SPACE before
- * the hash (" # Title"), which these specs' headings deliberately do NOT have. Joplin's editor renders
- * that leading whitespace as per-level indentation while the viewer strips it — a Joplin CORE bug,
- * independent of Ridgeline (it reproduces with no plugins at all). See leading-space-headings.spec.ts
- * for the Ridgeline-correctness lock and the round-2 hand-off for the upstream report. These specs
- * remain valid and green: they prove Ridgeline never shifts a NORMAL (no-leading-space) heading.
+ * ROUND-2 UPDATE (P1): the user's shift was finally reproduced under measurement — its trigger is a
+ * LEADING SPACE before the hash (" # Title"), which these specs' headings deliberately do NOT have.
+ * The cause is NOT Joplin core: a clean profile with inline rendering ON renders leading-space
+ * headings flush (measured 0px at every level). The shift is produced by the third-party Wrapped Line
+ * Indent editor plugin (com.bwat47.joplin-wrapped-line-indent), which applies a hanging indent
+ * (padding-left plus an equal negative text-indent) to any line with leading whitespace; on a heading
+ * line that whitespace is laid out at the heading's larger per-level font, so the indent grows with
+ * level (measured ~7px at H1/1-space up to ~18px at H2/3-space). Ridgeline is fully exonerated: with
+ * the plugin present, editor geometry is pixel-identical whether Ridgeline is loaded or not. See
+ * leading-space-headings.spec.ts for the Ridgeline-correctness lock and the round-2 hand-off for the
+ * upstream report (filed against the plugin, not laurent22/joplin). These specs remain valid and
+ * green: they prove Ridgeline never shifts a NORMAL (no-leading-space) heading.
  */
 
 // Text-left parity tolerance (px). Sub-pixel layout + the 1px line padding are fine; a per-level

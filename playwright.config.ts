@@ -15,10 +15,13 @@ export default defineConfig({
   // Launching Joplin + waiting for the plugin to register can take a while on a cold profile, and
   // some tests wait out more than one of the panel's fallback refresh intervals.
   timeout: 240_000,
-  // A stuck suite must stop itself before the CI job's timeout-minutes hard-cancels it: a global
-  // timeout ends the run gracefully and still writes the HTML report and traces (a hard cancel does
-  // not), so failures stay diagnosable. Kept comfortably under the workflow's 20-minute job cap.
-  globalTimeout: 18 * 60_000,
+  // A stuck suite must stop itself gracefully (writing the HTML report and traces, which a hard
+  // process kill does not) rather than hang forever. The full suite now launches Joplin ~10 times
+  // serially (each cold launch ~75s), so a clean pass runs ~13-15 min; add the per-test retry budget
+  // and a busy machine and a single unsharded `npm run test:e2e` can approach that. The cap is set
+  // well above the realistic worst case so it only ever fires on a genuine hang, never on a slow-but-
+  // healthy run. Raise this, not lower it, if you add more Joplin-launching describe blocks.
+  globalTimeout: 35 * 60_000,
   expect: { timeout: 20_000 },
   // A single Joplin instance at a time.
   fullyParallel: false,

@@ -17,12 +17,16 @@ import {
  * CommonMark (§4.3) allows an ATX heading to carry up to three spaces of leading indent before the
  * `#` — " # Title", "  ## Title", "   ### Title" are all valid H1/H2/H3. Real users end up with these
  * because CodeMirror's auto-indent can carry a leading space onto a freshly-typed heading. Joplin's
- * RENDERED viewer strips that leading whitespace (correct); its Markdown EDITOR inline-rendering does
- * NOT — it renders the leading whitespace as visible indentation that grows with heading level (the
- * space is drawn at the level's larger font). That editor mis-indentation is a JOPLIN CORE bug (it
- * reproduces in a clean profile with no plugins and no Ridgeline — see the investigation log in
- * SMOKE.md), NOT something Ridgeline causes. So this spec deliberately asserts only RIDGELINE'S
- * behaviour, never core's buggy per-level geometry (which would flip the moment Joplin fixes it):
+ * RENDERED viewer strips that leading whitespace (correct). In the user's real desktop the Markdown
+ * EDITOR draws the leading whitespace as visible indentation that grows with heading level — but that
+ * mis-indentation is NOT Joplin core and NOT Ridgeline. A clean profile with inline rendering ON
+ * renders leading-space headings flush (measured 0px at every level); the shift only appears with the
+ * third-party Wrapped Line Indent plugin (com.bwat47.joplin-wrapped-line-indent) installed, which
+ * hang-indents any leading-whitespace line (padding-left + equal negative text-indent) and, on a
+ * heading line, lays that whitespace out at the level's larger font so the indent scales with level.
+ * Editor geometry is pixel-identical with Ridgeline loaded or not (see the round-2 hand-off notes). So
+ * this spec deliberately asserts only RIDGELINE'S behaviour, never the plugin's per-level geometry
+ * (which would flip the moment that plugin is fixed or removed):
  *
  *   1. Ridgeline lists leading-space headings in BOTH surfaces (a bar per heading, editor↔viewer
  *      parity) — they must not be dropped just because of the leading space.

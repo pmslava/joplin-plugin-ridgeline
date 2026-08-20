@@ -60,12 +60,16 @@ one **very long** heading.
 - [ ] **P1 — Leading-space headings (root cause found).** Ridgeline lists a bar for headings that
       carry a leading space before the hash (` # Title`, `  ## Title` — valid CommonMark), in **both**
       editor and viewer, and clicking one **jumps** to it. *Separately:* if you type ` # Title` with a
-      leading space you may notice the **editor** draws the heading text slightly **indented** (more so
-      at higher levels), while the **rendered viewer** shows it flush. That indentation is a **Joplin
-      core** editor bug, **not** Ridgeline — it reproduces in a clean profile with **no plugins at all**
-      (the editor renders the leading whitespace at the heading's larger font; the viewer strips it per
-      CommonMark). Removing the leading space fixes the line. Toggling Ridgeline on/off does not change
-      it in the slightest. A ready-to-file upstream report is in the round-2 hand-off notes.
+      leading space you may notice the **editor** draws the heading text **indented** (more so at higher
+      levels), while the **rendered viewer** shows it flush. That indentation is **not** Ridgeline and
+      **not** Joplin core — a clean profile with inline rendering ON draws leading-space headings flush
+      (measured 0px at every level). It is the third-party **Wrapped Line Indent** plugin
+      (`com.bwat47.joplin-wrapped-line-indent`), which hang-indents any line with leading whitespace and,
+      on a heading line, lays that whitespace out at the level's larger font — so the indent grows with
+      level (measured ~7px at H1 with one space up to ~18px at H2 with three). Removing the leading space
+      fixes the line; disabling Wrapped Line Indent also fixes it. Toggling Ridgeline on/off does not
+      change the geometry in the slightest (verified pixel-identical). A ready-to-file report for the
+      plugin is in the round-2 hand-off notes.
 - [ ] **P2 — Narrower, airier bars.** The bars are **thinner/shorter** than before (H1 ≈ 28px down to
       H6 ≈ 8px) and the stack has **more air**: visible gaps on **both sides** of the bars inside the
       strip, and a **larger vertical gap** between bars. It should read as a thin, airy stack.
