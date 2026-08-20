@@ -29,6 +29,13 @@ import {
  * The measurement tool (measureHeadingGeometry) is proven sensitive by the self-validation test
  * below: when an artificial per-level shift is injected it is detected; with only Ridgeline active the
  * offsets are zero.
+ *
+ * ROUND-2 UPDATE (P1): the user's shift was finally reproduced — its trigger is a LEADING SPACE before
+ * the hash (" # Title"), which these specs' headings deliberately do NOT have. Joplin's editor renders
+ * that leading whitespace as per-level indentation while the viewer strips it — a Joplin CORE bug,
+ * independent of Ridgeline (it reproduces with no plugins at all). See leading-space-headings.spec.ts
+ * for the Ridgeline-correctness lock and the round-2 hand-off for the upstream report. These specs
+ * remain valid and green: they prove Ridgeline never shifts a NORMAL (no-leading-space) heading.
  */
 
 // Text-left parity tolerance (px). Sub-pixel layout + the 1px line padding are fine; a per-level
