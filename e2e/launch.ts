@@ -72,6 +72,11 @@ export function createProfile(loadPlugin = true, seed: SeedSettings = {}): strin
     'autoUpdateEnabled': false,
     'locale': 'en_GB',
     'sync.target': 0,
+    // Match the user's real desktop: the Markdown editor renders markup inline (hidden `#` marks on
+    // heading lines, with the editor compensating). This is Joplin's default (true) but is seeded
+    // explicitly so the suite is pinned to the environment that surfaces the heading-indentation
+    // regression (R8) regardless of any future default change. File storage, top-level key.
+    'editor.inlineRendering': true,
   };
   if (loadPlugin) settings['plugins.devPluginPaths'] = PLUGIN_DIST;
 

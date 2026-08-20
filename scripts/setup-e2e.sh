@@ -7,7 +7,11 @@
 #
 set -euo pipefail
 
-JOPLIN_VERSION="${JOPLIN_E2E_VERSION:-3.6.14}"
+# Default matches the user's real desktop (3.7.6), so the E2E environment reproduces issues that
+# only surface on 3.7.x — notably the inline-rendering heading-indentation regression (R8). 3.7.6
+# has a published Linux AppImage on laurent22/joplin (verified). Override with JOPLIN_E2E_VERSION
+# (must be >= the plugin's app_min_version).
+JOPLIN_VERSION="${JOPLIN_E2E_VERSION:-3.7.6}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE_DIR="$REPO_ROOT/.e2e-cache"
 APPIMAGE="$CACHE_DIR/Joplin.AppImage"

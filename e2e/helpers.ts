@@ -254,6 +254,60 @@ export async function waitForEditorStrip(win: Page): Promise<void> {
   await expect(win.locator(EDITOR_STRIP)).toBeAttached({ timeout: 30_000 });
 }
 
+/**
+ * Geometry of the Markdown editor's heading lines, measured in a given window (main or secondary).
+ *
+ * With Joplin's inline rendering ON, heading lines hide their leading `#` marks on lines that don't
+ * hold the cursor, and the editor is supposed to keep the visible heading text flush with ordinary
+ * body text (same content-left edge). R8 is the regression where heading text is instead pushed
+ * progressively LEFT by level, past the content edge.
+ *
+ * We measure the visual left edge of each line's rendered text with a DOM Range over the line's
+ * contents (a Range collapses hidden/zero-width replaced decorations, so it reports where visible
+ * glyphs actually start). We report, per heading line: its level and text-left; plus the text-left
+ * of a representative body line and the content box's inner-left, all in the same viewport pixels.
+ */
+export interface HeadingGeometry {
+  contentLeft: number; // .cm-content inner left edge (border-box left + left padding)
+  bodyLeft: number; // text-left of a representative non-heading body line
+  headings: Array<{ level: number; left: number; text: string }>;
+}
+
+export async function measureHeadingGeometry(win: Page): Promise<HeadingGeometry> {
+  return win.evaluate(() => {
+    const editor = document.querySelector('.cm-editor');
+    const content = editor?.querySelector('.cm-content') as HTMLElement | null;
+    if (!editor || !content) return { contentLeft: -1, bodyLeft: -1, headings: [] };
+
+    const cs = getComputedStyle(content);
+    const cRect = content.getBoundingClientRect();
+    const contentLeft = cRect.left + (parseFloat(cs.paddingLeft) || 0);
+
+    const textLeft = (el: Element): number => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const r = range.getBoundingClientRect();
+      // An empty line yields a zero rect; fall back to the element's own left.
+      if (r.width === 0 && r.left === 0) return el.getBoundingClientRect().left;
+      return r.left;
+    };
+
+    const lines = Array.from(editor.querySelectorAll('.cm-line')) as HTMLElement[];
+    const headings: Array<{ level: number; left: number; text: string }> = [];
+    let bodyLeft = -1;
+    for (const line of lines) {
+      let level = 0;
+      for (let n = 1; n <= 6; n++) if (line.classList.contains(`cm-h${n}`)) level = n;
+      if (level > 0) {
+        headings.push({ level, left: textLeft(line), text: (line.textContent || '').trim() });
+      } else if (bodyLeft < 0 && (line.textContent || '').trim().length > 0) {
+        bodyLeft = textLeft(line);
+      }
+    }
+    return { contentLeft, bodyLeft, headings };
+  });
+}
+
 /** Select the note with the given title in the note list (used to exercise note switching). */
 export async function selectNoteByTitle(win: Page, title: string): Promise<void> {
   await win.locator('.note-list-item .title span', { hasText: title }).first().click();
