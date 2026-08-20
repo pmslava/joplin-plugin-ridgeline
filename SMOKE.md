@@ -73,12 +73,31 @@ dark theme, on a note with a mix of `#`…`######` headings and at least one **v
       TOC (and does not block selecting text there); only hovering the **bars** opens it.
 - [ ] **R7 — Selection drag.** While **selecting text** (mouse button held), drag the pointer onto
       the bars — the TOC still **opens**.
-- [ ] **R8 — Heading indentation (regression).** With the plugin active, heading lines keep their
-      text **aligned with body text** — no progressive left shift by level, in every combination of
-      side (left/right) × mode (overlay/reserve), for both existing and freshly typed headings, in the
-      main **and** secondary windows. (In a clean profile this was verified to already hold; if you
-      still see a shift, it points to a local **userchrome.css** rule or another editor plugin — see
-      the round-1 report.)
+- [ ] **R8 — Heading indentation (regression). STATUS: could not reproduce — needs your live
+      bisection.** With the plugin active, heading lines should keep their text **aligned with body
+      text** (no progressive left shift by level), in every side (left/right) × mode (overlay/reserve)
+      combo, existing and freshly typed, main and secondary windows. This was tested exhaustively on a
+      real Joplin **3.7.6** with inline rendering ON in the worst-case **right + reserve** combo, both
+      in a clean profile **and in a faithful copy of your environment** — your actual
+      `userchrome.css` plus **Rich Markdown** and **Wrapped Line Indentation** loaded (see
+      `e2e/heading-indent-faithful.spec.ts`). In every case all headings stayed flush (offset 0.0px).
+      Ridgeline's reserve is a single **uniform** pad on `.cm-content`, so it cannot shift text per
+      level, and Wrapped Line Indent only indents lines with **leading whitespace** (headings have
+      none). So the shift you saw is **environment-specific** and not something Ridgeline injects.
+      **If you still see it, bisect on your live desktop** (it is almost certainly another plugin's
+      per-level heading decoration, not Ridgeline):
+      1. Reproduce it first (right + reserve, a note with `#`…`######` headings).
+      2. Tools → Options → Plugins: **disable Ridgeline only**, relaunch. If the shift *remains*, it is
+         **not** Ridgeline — re-enable it and go to step 3. If it *disappears*, capture a screenshot and
+         reopen this as a Ridgeline bug (it did not reproduce here, so we'd need your exact combo).
+      3. With Ridgeline **on**, disable the other CM6 editor plugins **one at a time** (start with
+         **Rich Markdown**, then **Wrapped Line Indentation**, **Markdown Alerts**, **codeblock
+         autocomplete**, **MathMode**), relaunching between each, until the shift stops. The last one
+         you disabled is the interacting plugin.
+      4. As a userchrome cross-check, temporarily rename `~/.config/joplin-desktop/userchrome.css` and
+         relaunch. If the shift stops, a local CSS rule is the cause.
+      Report which step cleared it and we'll scope Ridgeline's reserve padding (or document the rule)
+      against that specific interaction.
 
 ## Notes
 

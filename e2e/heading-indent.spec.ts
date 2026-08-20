@@ -152,9 +152,20 @@ for (const editorMode of ['overlay', 'reserve'] as const) {
   });
 }
 
-// Note on the user's main-vs-secondary discriminator: during investigation the secondary window's
-// heading geometry was measured and was ALSO aligned (offsets zero), matching the main window — i.e.
-// no window-specific difference was reproducible in a clean profile. That comparison is not kept as a
-// committed spec because opening a secondary window under xvfb is intermittently unreliable (a harness
-// limitation, unrelated to the plugin); the secondary window's strip mounting is already covered by
-// the S8 multi-window spec, and the geometry invariant is locked by the four-combo guards above.
+// Scope of this file vs. the user's real report: the four-combo guards above lock the invariant in a
+// CLEAN profile only. That alone does not prove the user's per-level shift is gone, because his shift
+// (if real) would come from his OWN environment interacting with Ridgeline's reserve padding. That
+// gap is closed by heading-indent-faithful.spec.ts, which layers his actual userchrome.css plus the
+// two CM6 editor plugins that touch heading geometry (Rich Markdown — the source of his .cm-rm-*
+// rules — and Wrapped Line Indentation) into the profile in the worst-case right+reserve combo and
+// re-asserts the SAME invariant. In that faithful environment the shift did NOT reproduce (every
+// heading offset 0.0px, pre-existing and freshly typed, H1..H6; Rich Markdown verified loaded). R8 is
+// therefore closed as ENVIRONMENT-SPECIFIC and non-reproducible — NOT as a shipped code fix — with a
+// live bisection recipe for the user in SMOKE.md. These specs stand as a regression lock proving
+// Ridgeline's reserve padding never shifts heading text per level.
+//
+// On the main-vs-secondary discriminator: during investigation the secondary window's heading
+// geometry was also aligned (offsets zero), matching the main window — no window-specific difference
+// was reproducible. That comparison is not a committed spec because opening a secondary window under
+// xvfb is intermittently unreliable (a harness limitation); secondary-window strip mounting is already
+// covered by the S8 multi-window spec.
