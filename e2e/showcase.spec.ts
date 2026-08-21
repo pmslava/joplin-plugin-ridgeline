@@ -138,7 +138,7 @@ test.describe('Ridgeline showcase (dark theme)', () => {
 
     // Throwaway profile, forced to Joplin's built-in DARK theme (Setting.THEME_DARK = 2, verified in
     // the bundled app.asar), inline rendering ON (createProfile default), plugin loaded from ./dist.
-    const profileDir = createProfile(true, { side: 'left', maxDepth: 6 });
+    const profileDir = createProfile(true, { side: 'left', maxDepth: 6, editorMode: 'reserve', viewerMode: 'reserve' });
     const settingsPath = path.join(profileDir, 'settings.json');
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     // theme is a File-storage setting, but it is only honoured when themeAutoDetect is OFF — otherwise
