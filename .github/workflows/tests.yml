@@ -23,6 +23,29 @@ jobs:
       # validateScreenshots over the manifest). Install with scripts, then type-check and rebuild
       # explicitly so a build/type break fails here loudly and fast.
       - run: npm ci
+      # Version-consistency harness: pin the "quadruple" the publishing playbook requires. The bump
+      # helper (`npm run updateVersion`) only touches package.json + src/manifest.json, so the
+      # package-lock.json version fields drift silently unless the lockfile is refreshed. Fail the
+      # build here — before publishing can ever gate on it — unless all four agree.
+      - name: Check the version is pinned across all four places
+        run: |
+          node -e '
+            const pkg = require("./package.json").version;
+            const manifest = require("./src/manifest.json").version;
+            const lock = require("./package-lock.json");
+            const places = {
+              "package.json": pkg,
+              "src/manifest.json": manifest,
+              "package-lock.json .version": lock.version,
+              "package-lock.json .packages[\"\"].version": lock.packages[""].version,
+            };
+            const values = Object.values(places);
+            if (new Set(values).size !== 1) {
+              console.error("::error::Version mismatch across the four version places: " + JSON.stringify(places));
+              process.exit(1);
+            }
+            console.log("Version is consistent at " + pkg + " across all four version places.");
+          '
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build the plugin
