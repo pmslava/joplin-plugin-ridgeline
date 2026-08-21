@@ -24,7 +24,7 @@
 		barHeight: 3,
 		currentBarHeight: 5,
 		currentBarLengthBoostPx: 4,
-		barGap: 12,
+		barGap: 4,
 		minBarGap: 1,
 		normalOpacity: 0.45,
 		barSideAirPx: 12,
@@ -34,15 +34,15 @@
 		panelIndentPx: 12,
 		panelPaddingPx: 8,
 		panelRowPaddingPx: 3,
-		panelMaxWidth: 320,
-		panelMaxWidthFraction: 0.6,
+		panelMaxWidth: 420,
+		panelMaxWidthFraction: 0.66,
 		panelGapPx: 0,
 		hoverGraceMs: 200,
 		hoverOpenDelayMs: 300,
 		pollMs: 700,
 	};
 
-	var settings = { side: 'left', viewerMode: 'overlay', maxDepth: 6 };
+	var settings = { side: 'left', viewerMode: 'overlay', maxDepth: 6, showMinimap: true };
 	var tokens = FALLBACK_TOKENS;
 	var currentSig = null;
 	var buildTimer = null;
@@ -155,6 +155,8 @@
 					settings.viewerMode = result.viewerMode === 'reserve' ? 'reserve' : 'overlay';
 					var d = Number(result.maxDepth);
 					settings.maxDepth = isFinite(d) ? Math.min(6, Math.max(1, Math.round(d))) : 6;
+					// Z2: default true; only an explicit `false` hides the strip.
+					settings.showMinimap = result.showMinimap !== false;
 					if (result.tokens) tokens = result.tokens;
 				}
 			})
@@ -162,7 +164,7 @@
 	}
 
 	function settingsSignature() {
-		return JSON.stringify({ s: settings.side, m: settings.viewerMode, d: settings.maxDepth, t: tokens });
+		return JSON.stringify({ s: settings.side, m: settings.viewerMode, d: settings.maxDepth, v: settings.showMinimap, t: tokens });
 	}
 
 	function applyReserveMargin() {
@@ -204,6 +206,9 @@
 		if (strip.scrollHandler) window.removeEventListener('scroll', strip.scrollHandler, true);
 		if (strip.pointermove) document.removeEventListener('mousemove', strip.pointermove);
 		if (strip.docleave) document.removeEventListener('mouseleave', strip.docleave);
+		if (strip.pointerout) document.removeEventListener('mouseout', strip.pointerout);
+		if (strip.winblur) window.removeEventListener('blur', strip.winblur);
+		if (strip.visibility) document.removeEventListener('visibilitychange', strip.visibility);
 		if (strip.keydown) window.removeEventListener('keydown', strip.keydown);
 		if (strip.collapseTimer) clearTimeout(strip.collapseTimer);
 		if (strip.openTimer) clearTimeout(strip.openTimer);
@@ -216,6 +221,14 @@
 		var existing = document.getElementById(STRIP_ID);
 		if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 		teardown();
+
+		// Z2: hidden — leave nothing mounted (all listeners torn down by teardown) and drop any reserve
+		// margin so the note text reclaims the space.
+		if (!settings.showMinimap) {
+			document.body.style.marginLeft = '';
+			document.body.style.marginRight = '';
+			return;
+		}
 
 		var colors = computeColors();
 		var headings = headingElements();
@@ -246,10 +259,13 @@
 		if (side === 'right') { s.right = verticalScrollbarWidth() + 'px'; s.left = ''; }
 		else { s.left = '0'; s.right = ''; }
 
-		// Q4: the bars are absolutely positioned on an integer pixel PITCH (barHeight + gap) rather than
-		// spaced by a flex gap, so every inactive bar lands on an exact integer y and renders at the same
-		// height; the current bar (taller) grows downward without reflowing the bars below it.
+		// Z1: the bars are absolutely positioned on a PITCH (barHeight + gap, ~halved from before) with
+		// DEVICE-PIXEL-AWARE rounding — top = round(i * pitch * dpr) / dpr — so every inactive bar lands on
+		// an exact integer DEVICE pixel (phase 0) at any zoom and renders at the same height; the current
+		// bar (taller) grows downward without reflowing the bars below it.
 		var pitch = tokens.barHeight + currentGap(count);
+		var dpr = window.devicePixelRatio || 1;
+		var deviceSnap = function (px) { return Math.round(px * dpr) / dpr; };
 		var barsWrap = document.createElement('div');
 		barsWrap.className = 'ridgeline-bars';
 		var bw = barsWrap.style;
@@ -258,7 +274,7 @@
 		bw.maxHeight = '100%';
 		bw.width = '100%';
 		bw.boxSizing = 'border-box';
-		bw.height = (count > 0 ? (count - 1) * pitch + tokens.currentBarHeight : 0) + 'px';
+		bw.height = (count > 0 ? deviceSnap((count - 1) * pitch) + tokens.currentBarHeight : 0) + 'px';
 		// R6: the bar stack is the hover trigger zone and is interactive.
 		bw.pointerEvents = 'auto';
 		bw.cursor = 'pointer';
@@ -316,7 +332,7 @@
 			// Q4: absolute on an integer pitch, right-aligned via `right` (flush right edge, ragged left).
 			b.position = 'absolute';
 			b.right = barSideAir() + 'px';
-			b.top = (index * pitch) + 'px';
+			b.top = deviceSnap(index * pitch) + 'px';
 			b.height = tokens.barHeight + 'px';
 			b.width = tokenLength(level) + 'px';
 			b.background = colors.normalBar;
@@ -462,17 +478,33 @@
 				if (expanded) scheduleCollapse();
 			}
 		};
-		var docleave = function () { cancelOpen(); if (expanded) scheduleCollapse(); };
+		// Z3: the pointer left our surface (out of the note iframe into the main window, into another
+		// iframe, or out of the window). Cancel the dwell timer and start the close grace even though no
+		// further mousemove will arrive here to drive it.
+		function departZone() { cancelOpen(); if (expanded) scheduleCollapse(); }
+		var docleave = function () { departZone(); };
+		// Mirror of the editor fix: a mouseout whose relatedTarget is null (left the iframe document into
+		// the main window / a foreign context) or an IFRAME element. Internal moves carry a real
+		// relatedTarget and are ignored — the mousemove hit-test handles those.
+		var pointerout = function (event) {
+			var rt = event.relatedTarget;
+			if (rt === null || (rt && rt.tagName === 'IFRAME')) departZone();
+		};
+		var winblur = function () { departZone(); };
+		var visibility = function () { if (document.visibilityState !== 'visible') { cancelOpen(); if (expanded) collapse(); } };
 		var keydown = function (event) { if (event.key === 'Escape' && expanded) collapse(); };
 		document.addEventListener('mousemove', pointermove, { passive: true });
 		document.addEventListener('mouseleave', docleave);
+		document.addEventListener('mouseout', pointerout, { passive: true });
+		window.addEventListener('blur', winblur);
+		document.addEventListener('visibilitychange', visibility);
 		window.addEventListener('keydown', keydown);
 
 		document.body.appendChild(el);
 		applyReserveMargin();
 		updateActive();
 
-		strip = { el: el, scrollHandler: scrollHandler, pointermove: pointermove, docleave: docleave, keydown: keydown, collapseTimer: collapseTimer, openTimer: openTimer };
+		strip = { el: el, scrollHandler: scrollHandler, pointermove: pointermove, docleave: docleave, pointerout: pointerout, winblur: winblur, visibility: visibility, keydown: keydown, collapseTimer: collapseTimer, openTimer: openTimer };
 	}
 
 	function jump(anchor) {

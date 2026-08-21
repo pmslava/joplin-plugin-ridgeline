@@ -82,7 +82,8 @@ function reserveTheme(
 	settings: RidgelineSettings,
 	tokens: RidgelineTokens,
 ): ReturnType<typeof EditorView.theme> {
-	if (settings.editorMode !== 'reserve') {
+	// Z2: a hidden strip reserves no margin — there is nothing to keep the text clear of.
+	if (settings.editorMode !== 'reserve' || !settings.showMinimap) {
 		return EditorView.theme({});
 	}
 	const pad = `${stripTotalWidth(tokens) + tokens.edgeGapPx}px`;
@@ -116,6 +117,14 @@ class EditorStrip {
 	private readonly onKeyDown: (event: KeyboardEvent) => void;
 	private readonly onPointerMove: (event: MouseEvent) => void;
 	private readonly onDocLeave: () => void;
+	// Z3: event-boundary handlers. Once the pointer enters ANY iframe (his Cockpit panel, the note
+	// viewer, another plugin panel) our document stops receiving mousemove, so neither the dwell-timer
+	// cancel nor the open-panel close can be driven by mousemove any more. These fire without further
+	// mousemove: mouseout whose relatedTarget is null / an IFRAME (pointer left our surface into another
+	// pane), window blur, and visibility loss.
+	private readonly onPointerOut: (event: MouseEvent) => void;
+	private readonly onWinBlur: () => void;
+	private readonly onVisibility: () => void;
 	private resizeObserver: { disconnect(): void } | null = null;
 	// Content scripts run in the main renderer's JS realm, so the global `document`/`window` are the
 	// main window's even for a secondary-window editor. Build the strip in the editor's OWN document
@@ -178,16 +187,45 @@ class EditorStrip {
 		this.onPointerMove = (event: MouseEvent) =>
 			this.handlePointerMove(event.clientX, event.clientY, event.buttons);
 		this.ownerDoc.addEventListener('mousemove', this.onPointerMove, { passive: true });
-		this.onDocLeave = () => {
-			this.cancelOpen();
-			this.scheduleCollapse();
-		};
+		this.onDocLeave = () => this.departZone();
 		this.ownerDoc.addEventListener('mouseleave', this.onDocLeave);
+
+		// Z3: the pointer crossing from our document into an iframe (or out of the window) fires a
+		// mouseout on the last-hovered element whose relatedTarget is the IFRAME element, or null when it
+		// leaves the document / enters a foreign browsing context. Internal element-to-element moves carry
+		// a real relatedTarget and are ignored (the mousemove hit-test already handles those), so this
+		// only trips on a genuine departure to another pane — exactly the case where no more mousemove
+		// arrives to cancel the dwell timer or close the open panel.
+		this.onPointerOut = (event: MouseEvent) => {
+			const rt = event.relatedTarget as Node | null;
+			if (rt === null || (rt as HTMLElement).tagName === 'IFRAME') this.departZone();
+		};
+		this.ownerDoc.addEventListener('mouseout', this.onPointerOut, { passive: true });
+
+		// Z3: backstops for departures that emit no mouseout in our document — focus moving into an
+		// iframe/other app (blur) and the window being hidden/occluded (visibilitychange).
+		this.onWinBlur = () => this.departZone();
+		this.ownerWin.addEventListener('blur', this.onWinBlur);
+		this.onVisibility = () => {
+			if (this.ownerDoc.visibilityState !== 'visible') {
+				this.cancelOpen();
+				if (this.expanded) this.collapse();
+			}
+		};
+		this.ownerDoc.addEventListener('visibilitychange', this.onVisibility);
 
 		this.onKeyDown = (event: KeyboardEvent) => {
 			if (event.key === 'Escape' && this.expanded) this.collapse();
 		};
 		this.ownerWin.addEventListener('keydown', this.onKeyDown);
+	}
+
+	// Z3: the pointer left our interactive surface (into another pane, an iframe, or out of the window).
+	// Cancel any pending dwell-open and, if the panel is open, start the close grace — even though no
+	// further mousemove will arrive in this document to drive it.
+	private departZone(): void {
+		this.cancelOpen();
+		if (this.expanded) this.scheduleCollapse();
 	}
 
 	private measureScrollbarWidth(): number {
@@ -261,8 +299,10 @@ class EditorStrip {
 		s.position = 'fixed';
 		s.paddingTop = `${this.tokens.stripTopOffsetPx}px`;
 		s.width = `${stripTotalWidth(this.tokens)}px`;
-		// Above the editor content but comfortably below Joplin's dialogs/menus.
-		s.zIndex = '50';
+		// Z4: comfortably above Joplin's editor UI (its editor-area chrome tops out around z-index 20)
+		// while staying well below Joplin's dialogs/menus/overlays (1000+). 50 could be undercut by some
+		// editor-layer UI; 200 clears the editor stack without ever covering a dialog.
+		s.zIndex = '200';
 		s.boxSizing = 'border-box';
 		s.background = 'transparent';
 		s.display = 'flex';
@@ -368,16 +408,23 @@ class EditorStrip {
 		return this.tokens.barHeight + this.currentGap();
 	}
 
-	// Q4: place every bar at an EXACT integer y on a fixed pitch (absolute positioning), and size the
-	// hit-zone box to bound them. Inactive bars therefore all share the same rendered height and land on
-	// integer positions; the current bar (taller) grows downward without reflowing its neighbours.
+	// Z1: place every bar with DEVICE-PIXEL-AWARE rounding on a fixed pitch (absolute positioning), and
+	// size the hit-zone box to bound them. top_i = round(i * pitch * dpr) / dpr snaps each bar's top to
+	// an exact integer DEVICE pixel (phase 0) at ANY zoom, so every inactive bar antialiases identically
+	// (uniform boldness — the old Q4 fix, now zoom-proof) even at the halved pitch. The current bar
+	// (taller) grows downward without reflowing its neighbours.
+	private deviceSnap(px: number): number {
+		const dpr = this.ownerWin.devicePixelRatio || 1;
+		return Math.round(px * dpr) / dpr;
+	}
+
 	private layoutBars(): void {
 		const pitch = this.pitch();
 		for (let i = 0; i < this.bars.length; i++) {
-			this.bars[i].style.top = `${i * pitch}px`;
+			this.bars[i].style.top = `${this.deviceSnap(i * pitch)}px`;
 		}
 		const n = this.bars.length;
-		const boxHeight = n > 0 ? (n - 1) * pitch + this.tokens.currentBarHeight : 0;
+		const boxHeight = n > 0 ? this.deviceSnap((n - 1) * pitch) + this.tokens.currentBarHeight : 0;
 		this.barsWrap.style.height = `${boxHeight}px`;
 	}
 
@@ -630,6 +677,9 @@ class EditorStrip {
 		this.ownerWin.removeEventListener('keydown', this.onKeyDown);
 		this.ownerDoc.removeEventListener('mousemove', this.onPointerMove);
 		this.ownerDoc.removeEventListener('mouseleave', this.onDocLeave);
+		this.ownerDoc.removeEventListener('mouseout', this.onPointerOut);
+		this.ownerWin.removeEventListener('blur', this.onWinBlur);
+		this.ownerDoc.removeEventListener('visibilitychange', this.onVisibility);
 		if (this.resizeObserver) {
 			this.resizeObserver.disconnect();
 			this.resizeObserver = null;
@@ -647,7 +697,9 @@ function coerceSettings(raw: Partial<RidgelineSettings> | null | undefined): Rid
 	let maxDepth = Number(raw?.maxDepth);
 	if (!Number.isFinite(maxDepth)) maxDepth = 6;
 	maxDepth = Math.min(6, Math.max(1, Math.round(maxDepth)));
-	return { side, editorMode, viewerMode, maxDepth };
+	// Default true: only an explicit `false` hides the strip.
+	const showMinimap = raw?.showMinimap !== false;
+	return { side, editorMode, viewerMode, maxDepth, showMinimap };
 }
 
 export default (context: ContentScriptContext): MarkdownEditorContentScriptModule => ({
@@ -679,22 +731,77 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		// into the now-detached DOM (it would leave listeners nothing tears down).
 		let destroyed = false;
 
+		const onJump = (heading: EditorHeading) => {
+			void context.postMessage({ type: 'jump', anchor: heading.slug, line: heading.line });
+		};
+
 		const rebuildHeadings = () => {
 			if (!strip) return;
 			strip.setHeadings(parseHeadings(view.state.doc.toString()));
 		};
 
-		// Live settings: the coordinator pushes new values here on joplin.settings.onChange, so the
-		// strip re-themes / re-sides / re-filters without a relaunch.
-		editorControl.registerCommand(EDITOR_APPLY_SETTINGS_COMMAND, (payload: SettingsResponse) => {
-			currentSettings = coerceSettings(payload);
-			if (payload && payload.tokens) currentTokens = payload.tokens;
+		// Z2: reconcile the strip's presence with the showMinimap setting. Mount when it should be shown
+		// and is not; fully unmount (destroy → all listeners torn down) when it should be hidden; otherwise
+		// push the new settings into the live strip. Called on first load and on every live settings push.
+		const syncStrip = () => {
+			if (destroyed || !view.dom.isConnected) return;
+			if (currentSettings.showMinimap) {
+				if (strip) {
+					strip.applySettings(currentSettings, currentTokens);
+				} else {
+					strip = new EditorStrip(view, currentSettings, currentTokens, onJump);
+					rebuildHeadings();
+				}
+			} else if (strip) {
+				strip.destroy();
+				strip = null;
+			}
+		};
+
+		// A signature of the last-applied settings+tokens, so the poll (below) only re-applies on a real
+		// change and never fights the push.
+		let settingsSig = '';
+
+		// Apply a fetched/pushed settings response: re-theme (reserve margin) and mount/unmount/re-render
+		// the strip. Idempotent via the signature guard when `force` is false.
+		const applySettingsResponse = (payload: SettingsResponse | null | undefined, force: boolean): void => {
+			const next = coerceSettings(payload);
+			const nextTokens = payload && payload.tokens ? payload.tokens : currentTokens;
+			const sig = JSON.stringify(next) + '|' + JSON.stringify(nextTokens);
+			if (!force && sig === settingsSig) return;
+			settingsSig = sig;
+			currentSettings = next;
+			currentTokens = nextTokens;
 			if (destroyed || !view.dom.isConnected) return;
 			view.dispatch({
 				effects: reserveCompartment.reconfigure(reserveTheme(currentSettings, currentTokens)),
 			});
-			if (strip) strip.applySettings(currentSettings, currentTokens);
+			syncStrip();
+		};
+
+		// Live settings PUSH: the coordinator calls this on joplin.settings.onChange for the FOCUSED
+		// window, so the strip re-themes / re-sides / re-filters / shows / hides instantly, no relaunch.
+		editorControl.registerCommand(EDITOR_APPLY_SETTINGS_COMMAND, (payload: SettingsResponse) => {
+			applySettingsResponse(payload, true);
 		});
+
+		// Live settings POLL (multi-window backstop): editor.execCommand only reaches the focused
+		// window's editor, so a change made while another window is focused would never reach THIS
+		// window via the push. Poll the coordinator and apply on a real change (signature guard), so
+		// the strip shows/hides/re-sides in EVERY window, not just the focused one. Cheap: one message
+		// per interval, and applySettingsResponse is a no-op unless something actually changed.
+		const timerWin: Window = view.scrollDOM.ownerDocument.defaultView ?? window;
+		const pollId = timerWin.setInterval(() => {
+			if (destroyed || !view.dom.isConnected) return;
+			void (async () => {
+				try {
+					const fetched = (await context.postMessage({ type: 'getSettings' })) as SettingsResponse | null;
+					if (fetched) applySettingsResponse(fetched, false);
+				} catch {
+					/* transient; try again next tick */
+				}
+			})();
+		}, Math.max(200, currentTokens.pollMs || DESIGN_TOKENS.pollMs));
 
 		const updateListener = EditorView.updateListener.of((update: ViewUpdate) => {
 			if (!strip) return;
@@ -709,6 +816,7 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			class {
 				public destroy() {
 					destroyed = true;
+					timerWin.clearInterval(pollId);
 					strip?.destroy();
 					strip = null;
 				}
@@ -716,12 +824,9 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		);
 
 		void (async () => {
+			let fetched: SettingsResponse | null = null;
 			try {
-				const fetched = (await context.postMessage({ type: 'getSettings' })) as SettingsResponse | null;
-				if (fetched) {
-					currentSettings = coerceSettings(fetched);
-					if (fetched.tokens) currentTokens = fetched.tokens;
-				}
+				fetched = (await context.postMessage({ type: 'getSettings' })) as SettingsResponse | null;
 			} catch (error) {
 				console.warn('[ridgeline] could not fetch settings, using defaults', error);
 			}
@@ -730,19 +835,9 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			// dispatching or mounting anything.
 			if (destroyed || !view.dom.isConnected) return;
 
-			view.dispatch({
-				effects: reserveCompartment.reconfigure(reserveTheme(currentSettings, currentTokens)),
-			});
-
-			const newStrip = new EditorStrip(view, currentSettings, currentTokens, (heading) => {
-				void context.postMessage({ type: 'jump', anchor: heading.slug, line: heading.line });
-			});
-			if (destroyed || !view.dom.isConnected) {
-				newStrip.destroy();
-				return;
-			}
-			strip = newStrip;
-			rebuildHeadings();
+			// Z2: mount only if showMinimap; applySettingsResponse seeds the poll signature and syncStrip
+			// guards the destroyed/disconnected race itself.
+			applySettingsResponse(fetched ?? { ...coerceSettings(null), tokens: currentTokens }, true);
 		})();
 
 		editorControl.addExtension([
