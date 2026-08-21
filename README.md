@@ -61,54 +61,15 @@ All three are also in the **Tools** menu, and each flips the matching setting so
 ## Development
 
 ```
+git clone https://github.com/pmslava/joplin-plugin-ridgeline
+cd joplin-plugin-ridgeline
 npm install
 npm run dist
 ```
 
 `npm run dist` builds the publishable plugin to `publish/io.github.pmslava.ridgeline.jpl`.
 
-### End-to-end tests
-
-The E2E suite drives a real Joplin desktop (Electron) build with the plugin loaded, under a virtual display. It needs Xvfb and the Playwright Chromium host dependencies installed.
-
-First fetch the Joplin AppImage the tests run against (downloaded once, then cached under `.e2e-cache/`):
-
-```
-npm run setup:e2e
-```
-
-The version is pinned in `scripts/setup-e2e.sh` and overridable — it must be at least the manifest's `app_min_version`:
-
-```
-JOPLIN_E2E_VERSION=3.7.6 npm run setup:e2e
-```
-
-`npm run test:e2e` runs the whole suite in one process (it wraps `playwright test` in `xvfb-run`). The suite launches Joplin many times serially, so on a laptop it is more comfortable to run it in **four shards**, each in the foreground:
-
-```
-npm run dist
-npm run setup:e2e
-xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test --shard=1/4
-xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test --shard=2/4
-xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test --shard=3/4
-xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test --shard=4/4
-```
-
-The `-screen 0 1920x1080x24` server args give the virtual display enough room for the split-pane layouts the specs assert against.
-
-### Regenerating the screenshots
-
-The README/manifest screenshots are produced by a separate, opt-in spec that captures (rather than asserts) against a throwaway profile forced to Joplin's dark theme:
-
-```
-npm run dist
-npm run setup:e2e
-SHOWCASE=1 xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test e2e/showcase.spec.ts
-```
-
-It writes the PNGs into `docs/images/`. Its content is fictional ("Acme Rocket Skates") — it never touches your real Joplin profile.
-
-See [PUBLISHING.md](PUBLISHING.md) for the release flow.
+For the end-to-end test suite, regenerating the showcase screenshots, and a tour of the repository layout, see [DEVELOPMENT.md](DEVELOPMENT.md). See [PUBLISHING.md](PUBLISHING.md) for the release flow.
 
 ## Credits
 

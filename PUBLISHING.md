@@ -25,8 +25,8 @@ publishes to npm via **trusted publishing (OIDC)**. **You never run `npm publish
    with `npm view joplin-plugin-ridgeline version`.
 5. The Joplin catalogue refreshes on its own schedule (hours to about a day). A stale plugin page is
    not a failed release.
-6. Afterward, append the release record to the project note and delete merged branches/worktrees in one
-   pass.
+6. Afterward, append the release record to the maintainer's project notes and delete merged
+   branches/worktrees in one pass.
 
 ## Version bump
 
@@ -62,7 +62,7 @@ the harness check passes.
 
 Note that `src/manifest.json` carries a `screenshots` array. `npm run dist` runs webpack's
 `validateScreenshots`, which rejects any screenshot that is not a `png`/`jpg`/`jpeg`/`gif`/`webp` or is
-larger than **1024 KB** — so if you regenerate the images (see the README), keep them under that cap or
+larger than **1024 KB** — so if you regenerate the images (see [DEVELOPMENT.md](DEVELOPMENT.md)), keep them under that cap or
 the build (and therefore the publish) will fail loudly.
 
 ## The gates, in order
@@ -82,8 +82,9 @@ commit you release has already passed every gate.
    `package.json` == `src/manifest.json` == `package-lock.json .version` == `package-lock.json
    .packages[""].version`). Run `npm ci` locally if you want to reproduce it before pushing.
 
-2. **Local E2E — green.** Run the full real-app Playwright suite locally (see the README for the
-   four-shard command). This is the real-app coverage that the publish gate deliberately does not run.
+2. **Local E2E — green.** Run the full real-app Playwright suite locally (see
+   [DEVELOPMENT.md](DEVELOPMENT.md) for the four-shard command). This is the real-app coverage that the
+   publish gate deliberately does not run.
 
 3. **Push `main`.**
 
@@ -201,7 +202,7 @@ Do it **exactly once**, in this order:
 1. **Prove the gates**, in the normal order: local fast gate green → local E2E green → push `main` → the
    GitHub **Tests** workflow green **on that exact pushed SHA** (see
    [The gates, in order](#the-gates-in-order)). The commit you are about to publish must already be green.
-2. **`npm login`** — interactive; complete 2FA / YubiKey when prompted. This writes a **temporary local
+2. **`npm login`** — interactive; complete 2FA / hardware-key 2FA when prompted. This writes a **temporary local
    token into `~/.npmrc`**. This is the only moment a token exists anywhere, and step 7 removes it.
 3. **`npm run dist`** — build `publish/io.github.pmslava.ridgeline.jpl` from the exact commit you proved
    green.
@@ -260,9 +261,9 @@ version` shows the new version, the release worked; just wait for the catalogue 
 
 ## After the release
 
-1. **Append the release record to the project note.** In the Joplin project note **"Joplin Ridgeline
-   Plugin"**, record the released version, its date, and any new gotchas learned this cycle (so the next
-   release starts from the current truth).
+1. **Append the release record to the project notes.** In the maintainer's project notes, record the
+   released version, its date, and any new gotchas learned this cycle (so the next release starts from
+   the current truth).
 2. **Clean up branches and worktrees in one exhaustive pass.** Delete every branch and git worktree that
    was merged for this release — locally and on the remote — in a single sweep, so no stale
    `claude/*` branches or worktrees linger.
@@ -281,5 +282,5 @@ version` shows the new version, the release worked; just wait for the catalogue 
 - [ ] `publish.yml` succeeded; **no** manual `npm publish`.
 - [ ] `npm view joplin-plugin-ridgeline version` shows the new version.
 - [ ] Catalogue shows the new version (allow up to ~a day; a stale page is not a failed release).
-- [ ] Release record appended to the "Joplin Ridgeline Plugin" note; merged branches/worktrees deleted
+- [ ] Release record appended to the maintainer's project notes; merged branches/worktrees deleted
       in one pass.
