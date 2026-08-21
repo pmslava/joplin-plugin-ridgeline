@@ -51,6 +51,33 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test --shard=4
 The `-screen 0 1920x1080x24` server args give the virtual display enough room for the split-pane layouts
 the specs assert against.
 
+Run the four shards **sequentially** on the laptop — one foreground command finishing before the next —
+never concurrently. Parallel `xvfb-run` invocations multiply the RAM and /tmp load and risk the desktop
+collapses described below.
+
+### Resource discipline (laptop)
+
+After two desktop collapses on 2026-08-21, treat a local E2E run as a heavyweight job:
+
+- The harness is already headless (`xvfb-run -a`, auto-numbered virtual display) and serial within a run
+  (`workers:1`) — test windows never touch the live display. The laptop risks are RAM and /tmp, not
+  displays.
+- ONE E2E run machine-wide: before starting, `pgrep -f e2e-cache` must be empty (covers cockpit +
+  ridgeline + all worktrees). Don't shard locally into parallel `xvfb-run` invocations.
+- RAM gate: check `free -h` before a run; don't launch Joplin instances when available memory is under
+  ~4G. earlyoom SIGTERMs the session's processes below 10% available — a desktop collapse costs more than
+  a deferred test run.
+- /tmp is a 7.7G tmpfs shared with the live desktop. Point bulk scratch (`TMPDIR`) at disk, clean session
+  task scratch after runs, never let /tmp approach 100% — a full /tmp breaks glycin PNG decoding and can
+  kill the whole XFCE session (libwnck `g_assert`, incident #1).
+- Reap orphans after any killed/crashed run (teardown only runs on the happy path): stray Joplin
+  processes whose cmdline contains `.e2e-cache`, leftover `Xvfb` servers (`pgrep -a Xvfb`), stale
+  `/tmp/.X*-lock` files, and `e2e/.profiles/profile-*` dirs.
+- Always launch via `npm run test:e2e` — a bare `npx playwright test` would inherit the live `:0`
+  display.
+- A `/tmp/appimage_extracted_*` Joplin is NEVER the harness — that's the real desktop app in
+  extract-and-run fallback; remove the stale extraction once the app isn't using it.
+
 ## Regenerating the showcase screenshots
 
 The README/manifest screenshots are produced by a separate, opt-in spec that captures (rather than
