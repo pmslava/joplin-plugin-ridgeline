@@ -1,4 +1,4 @@
-# Ridgeline — manual checklist (Phase 2, v0.2.2)
+# Ridgeline — manual checklist (Phase 2, v0.2.3)
 
 Ridgeline draws a **compact minimap** at one edge of the Markdown editor and the rendered viewer: a
 vertical stack of thin horizontal bars, one per heading, where **bar length encodes heading level**
@@ -51,41 +51,35 @@ Use a note with several headings (mix of `#`…`######`) and enough text to scro
 - [ ] **Multi-window.** With the note selected, press **Ctrl+Alt+N** (Note → *Open note in new
       window*). The minimap appears in the **new window** too and tracks its own scroll independently.
 
-## Round-2 re-check (v0.2.2)
+## Round-3 re-check (v0.2.3)
 
 Re-verify each on Joplin 3.7.x with the Markdown editor's **inline rendering ON** (Settings → Editor
-→ *Render markup in editor*), dark theme, on a note with a mix of `#`…`######` headings and at least
-one **very long** heading.
+→ *Render markup in editor*), your real **dark theme** and **120% zoom**, strip on the **left**, on a
+note with a mix of `#`…`######` headings and at least one **very long** heading.
 
-- [ ] **P1 — Leading-space headings (root cause found).** Ridgeline lists a bar for headings that
-      carry a leading space before the hash (` # Title`, `  ## Title` — valid CommonMark), in **both**
-      editor and viewer, and clicking one **jumps** to it. *Separately:* if you type ` # Title` with a
-      leading space you may notice the **editor** draws the heading text **indented** (more so at higher
-      levels), while the **rendered viewer** shows it flush. That indentation is **not** Ridgeline and
-      **not** Joplin core — a clean profile with inline rendering ON draws leading-space headings flush
-      (measured 0px at every level). It is the third-party **Wrapped Line Indent** plugin
-      (`com.bwat47.joplin-wrapped-line-indent`), which hang-indents any line with leading whitespace and,
-      on a heading line, lays that whitespace out at the level's larger font — so the indent grows with
-      level (measured ~7px at H1 with one space up to ~18px at H2 with three). Removing the leading space
-      fixes the line; disabling Wrapped Line Indent also fixes it. Toggling Ridgeline on/off does not
-      change the geometry in the slightest (verified pixel-identical). A ready-to-file report for the
-      plugin is in the round-2 hand-off notes.
-- [ ] **P2 — Narrower, airier bars.** The bars are **thinner/shorter** than before (H1 ≈ 28px down to
-      H6 ≈ 8px) and the stack has **more air**: visible gaps on **both sides** of the bars inside the
-      strip, and a **larger vertical gap** between bars. It should read as a thin, airy stack.
-- [ ] **P3 — Single-line TOC rows.** Hovering opens the TOC. Every row is **one line tall**. A heading
-      too long for the panel is trimmed with a CSS **ellipsis** (`…`) — it must **not** wrap onto a
-      second line. The panel may be a bit **wider** than before, up to a moderate cap.
-- [ ] **P4 — Pointer cursor on rows.** Moving the pointer over a TOC row shows a **pointer (hand)**
-      cursor — in **both** the editor and the rendered viewer. (Check the real on-screen cursor, not
-      just the hover highlight.)
-- [ ] **P5 — Selection drag does NOT open the TOC.** While **selecting text** (mouse button held),
-      drag the pointer across the bars — the TOC must **stay closed** and the **selection must not be
-      interrupted**. A plain **hover with no button pressed** over the bars still opens it. (This is the
-      reverse of the round-1 R7 behaviour.)
+- [ ] **Q1 — Even slimmer bars + more air.** The bars are **shorter still** (H1 ≈ 20px down to H6 ≈ 6px,
+      was 28→8) and there is **visibly more breathing room** between the note text and the minimap than
+      before. It should read as a thin sliver floating clear of the text.
+- [ ] **Q2 — No TOC on transit (hover-intent).** **Swipe the mouse quickly across the strip** on your
+      way to the note list — the outline must **NOT** pop open. Now **rest the pointer on the bars for
+      about a third of a second** — it opens. The delay is tunable at Settings → Ridgeline → **Hover open
+      delay (ms)** (100–1000, default 300); raise it if a quick trip still catches it, lower it to open
+      sooner. Selecting text (button held) dragged across the bars still does **not** open it, **Esc**
+      still closes it, and moving from the bars into the open panel keeps it open.
+- [ ] **Q3 — Pointer cursor on TOC rows.** Open the outline and move the pointer over the rows — the
+      cursor is a **pointer (hand)** everywhere on the panel, in **both** the editor and the rendered
+      viewer, exactly like Cockpit's list rows. (This is the fix that failed twice before: the editor
+      panel now lives as a fixed element **outside** the CodeMirror editor, so nothing in the editor can
+      steal the cursor. Check the **real on-screen cursor**, not just the row highlight.)
+- [ ] **Q4 — Uniform inactive bars.** Look at the non-current bars — they must all look **equally bold**
+      (same thickness), with **no** bar appearing heavier than its neighbours. The **current** bar is
+      still clearly bolder (thicker + brighter + a touch longer). Try it at your usual zoom; the bars are
+      snapped to whole pixels so half-pixel fuzz no longer makes some look bold.
 
-Round-1 fixes R1–R6 (top anchor, right-aligned bars, current-bar prominence, panel overlay, row hover
-highlight, trigger-zone) remain in force — spot-check them too.
+Round-1/2 behaviours (top anchor, right-aligned bars, panel overlay, single-line ellipsized rows,
+click-to-jump, multi-window, reserve mode, maxDepth, live settings) remain in force — spot-check them.
+Note P3's single-line-ellipsis rows are unchanged; the round-2 P1 finding (leading-space heading indent
+is the third-party **Wrapped Line Indent** plugin, not Ridgeline) still stands.
 
 ## Notes
 

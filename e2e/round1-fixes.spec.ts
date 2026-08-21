@@ -175,18 +175,50 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     await collapsePanel(win);
   });
 
-  // R5/P4 — a row changes background on hover, and the cursor is a pointer. The cursor is asserted on
-  // the element document.elementFromPoint ACTUALLY returns at the row's centre (what the OS uses to pick
-  // the displayed cursor), not on the row node we hand-picked — the earlier row-only assertion passed
-  // while the real displayed cursor was still the editor's default, because a different element sat
-  // under the pointer. (P4.)
-  test('R5/P4: rows have a hover highlight and the hit element shows a pointer cursor', async () => {
+  // R5/Q3 — a row changes background on hover, and the cursor is a pointer. Two prior "fixes" passed a
+  // single-point cursor assertion while the real on-screen cursor still wasn't a pointer, because the
+  // panel lived inside .cm-editor where a CM layer/cursor could win. The panel is now a FIXED element on
+  // <body>, fully outside CodeMirror. This test SAMPLES MULTIPLE points across the open panel (row text,
+  // row left padding, panel padding, container/panel edge) and for EACH asserts (a) the element
+  // document.elementFromPoint returns is the panel or a descendant of it — i.e. nothing from the editor
+  // sits on top — (b) its computed cursor is pointer, and (c) no element in the chain from the hit up to
+  // the panel disables pointer-events. (The strip CONTAINER above the panel intentionally has
+  // pointer-events:none, with the panel re-enabling it; that is above the resolved hit and irrelevant.)
+  function samplePanelCursors(): { label: string; tag: string | null; cls: string; cursor: string | null; insidePanel: boolean; blockedBy: string | null }[] {
+    const panel = document.querySelector('.ridgeline-editor-strip .ridgeline-panel') as HTMLElement | null;
+    const rows = Array.from(document.querySelectorAll('.ridgeline-editor-strip .ridgeline-panel-row')) as HTMLElement[];
+    const out: { label: string; tag: string | null; cls: string; cursor: string | null; insidePanel: boolean; blockedBy: string | null }[] = [];
+    if (!panel) return out;
+    const pr = panel.getBoundingClientRect();
+    const probe = (label: string, x: number, y: number) => {
+      const t = document.elementFromPoint(x, y) as HTMLElement | null;
+      const insidePanel = !!t && (t === panel || panel.contains(t));
+      // Walk from the hit up to (and including) the panel; flag any pointer-events:none in that span.
+      let blockedBy: string | null = null;
+      let el: HTMLElement | null = t;
+      for (let i = 0; el && i < 12; i++, el = el.parentElement) {
+        if (getComputedStyle(el).pointerEvents === 'none') blockedBy = `${el.tagName}.${el.className}`;
+        if (el === panel) break;
+      }
+      out.push({ label, tag: t?.tagName ?? null, cls: (t?.className || '').toString(), cursor: t ? getComputedStyle(t).cursor : null, insidePanel, blockedBy });
+    };
+    // A non-current row (index 2) so current-row styling never confounds.
+    const row = rows[2] || rows[0];
+    const rr = row.getBoundingClientRect();
+    probe('row-textcenter', rr.left + rr.width / 2, rr.top + rr.height / 2);
+    probe('row-leftpad', rr.left + 2, rr.top + rr.height / 2);
+    probe('panel-padding', pr.left + 3, pr.top + 3);
+    probe('panel-innermid', pr.left + pr.width / 2, pr.top + pr.height / 2);
+    return out;
+  }
+
+  test('R5/Q3: rows highlight on hover and EVERY sampled panel point resolves to a pointer cursor', async () => {
     const { win } = joplin;
     await collapsePanel(win);
     await hoverEditorBars(win);
     await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-expanded', 'true', { timeout: 5_000 });
 
-    // A non-current row (index 2) so the current-row styling does not confound the hover background.
+    // Hover highlight on a non-current row.
     const row = win.locator(`[data-testid="ridgeline-editor-row-2"]`);
     const before = await row.evaluate((el) => getComputedStyle(el).backgroundColor);
     await row.hover();
@@ -195,19 +227,13 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     expect(after).not.toBe(before);
     expect(after).not.toBe('rgba(0, 0, 0, 0)');
 
-    // The displayed-cursor source: whatever element is topmost at the row's centre must resolve to a
-    // pointer cursor.
-    const hit = await row.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      const target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return {
-        tag: target?.tagName ?? null,
-        cls: target?.className ?? null,
-        cursor: target ? getComputedStyle(target).cursor : null,
-        isRowOrInside: !!target && (target === el || el.contains(target) || target.contains(el)),
-      };
-    });
-    expect(hit.cursor, `elementFromPoint hit <${hit.tag} class="${hit.cls}"> cursor`).toBe('pointer');
+    const samples = await win.evaluate(samplePanelCursors);
+    expect(samples.length).toBeGreaterThanOrEqual(4);
+    for (const s of samples) {
+      expect(s.insidePanel, `${s.label}: hit <${s.tag} class="${s.cls}"> is the panel/descendant`).toBe(true);
+      expect(s.cursor, `${s.label}: hit <${s.tag} class="${s.cls}"> cursor`).toBe('pointer');
+      expect(s.blockedBy, `${s.label}: pointer-events:none between hit and panel`).toBeNull();
+    }
     await collapsePanel(win);
   });
 
@@ -257,11 +283,43 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
     const hasSelection = await win.evaluate(() => (window.getSelection()?.toString().length ?? 0) > 0);
     expect(hasSelection, 'text selection survived the drag across the minimap').toBe(true);
 
-    // A button-free hover over the same bars DOES open the panel.
+    // A button-free hover over the same bars DOES open the panel (after the dwell — see Q2 below).
     await collapsePanel(win);
     await win.mouse.move(barsCx, barsCy);
     await win.waitForTimeout(50);
     await win.mouse.move(barsCx + 1, barsCy);
+    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-expanded', 'true', { timeout: 5_000 });
+    await collapsePanel(win);
+  });
+
+  // Q2 (NEW this round; REPLACES the round-2 instant-open-on-hover behaviour) — hover-intent. A pointer
+  // merely CROSSING the strip (transit, tens of ms) must NOT open the TOC; the pointer must DWELL on the
+  // bars for hoverOpenDelayMs (~300ms) before it opens.
+  test('Q2: a quick transit across the bars does NOT open the TOC', async () => {
+    const { win } = joplin;
+    await collapsePanel(win);
+    const bars = await boxOf(win, EDITOR_BARS);
+    const cy = bars.y + bars.height / 2;
+    // Sweep the pointer FROM outside the strip, ACROSS the bars, and OUT the other side (onto the note
+    // text) in one fast motion — exactly a mouse trip to the note list. It enters and leaves the bar
+    // hit-zone well within the dwell window, so the panel must stay closed.
+    await win.mouse.move(bars.x - 40, cy);
+    await win.mouse.move(bars.x + bars.width + 120, cy, { steps: 6 });
+    await win.waitForTimeout(500); // > dwell; if intent were mis-fired it would be open by now
+    expect(await win.locator(EDITOR_STRIP).getAttribute('data-expanded')).not.toBe('true');
+  });
+
+  test('Q2: dwelling on the bars opens the TOC after the delay', async () => {
+    const { win } = joplin;
+    await collapsePanel(win);
+    const bars = await boxOf(win, EDITOR_BARS);
+    const cx = bars.x + bars.width / 2;
+    const cy = bars.y + bars.height / 2;
+    // Arrive and REST on the bars. It must not be open immediately (dwell not yet elapsed)...
+    await win.mouse.move(cx, cy);
+    await win.waitForTimeout(120);
+    expect(await win.locator(EDITOR_STRIP).getAttribute('data-expanded')).not.toBe('true');
+    // ...and it must open once the dwell elapses.
     await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-expanded', 'true', { timeout: 5_000 });
     await collapsePanel(win);
   });

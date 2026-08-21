@@ -14,6 +14,7 @@ import {
   SETEXT_REAL_HEADING_COUNT,
   waitForEditorStrip,
   EDITOR_STRIP,
+  VIEWER_IFRAME,
 } from './helpers';
 import { DESIGN_TOKENS } from '../src/tokens';
 
@@ -55,8 +56,8 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     return widths;
   }
 
-  // D1/R9 — one bar per heading, base lengths diminishing LINEARLY by heading level (H1 longest → H6
-  // shortest) per the shared design tokens (28/24/20/16/12/8 — an equal 4px step per level; P2).
+  // D1/R9 — one bar per heading, base lengths diminishing near-LINEARLY by heading level (H1 longest →
+  // H6 shortest) per the shared design tokens (Q1: 20/17/14/11/8/6, a ~3px step per level).
   test('bar count matches headings and widths are linearly ordered by level', async () => {
     await scrollEditorTo(joplin.win, 0);
     expect(await joplin.win.locator(`${EDITOR_STRIP} .ridgeline-bar`).count()).toBe(
@@ -71,12 +72,76 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     // Sanity-check the extremes against the tokens (H1 = longest, H6 = shortest).
     expect(Math.round(widths[0])).toBe(DESIGN_TOKENS.levelLengths[1]);
     expect(Math.round(widths[widths.length - 1])).toBe(DESIGN_TOKENS.levelLengths[6]);
-    // R9: the decrements are EQUAL (linear), so every adjacent pair is equally distinguishable. Each
-    // step is ~5px; assert they match within 1px of each other.
+    // R9: the decrements are near-EQUAL (linear), so every adjacent pair is equally distinguishable.
+    // Each step is ~3px; assert they match within 1px of each other.
     const steps = widths.slice(1).map((w, i) => widths[i] - w);
     const minStep = Math.min(...steps);
     const maxStep = Math.max(...steps);
     expect(maxStep - minStep).toBeLessThanOrEqual(1);
+  });
+
+  // Q1 — visibly more air between the bars and the strip's text-side edge (barSideAirPx raised 7→12).
+  // For every bar, the gap from its (flush) right edge to the strip's right edge equals that air.
+  test('Q1: the bar stack floats with clearly more side air than before (>8px)', async () => {
+    const { win } = joplin;
+    await scrollEditorTo(win, 0);
+    const strip = await win.locator(EDITOR_STRIP).boundingBox();
+    const bars = win.locator(`${EDITOR_STRIP} .ridgeline-bar`);
+    const count = await bars.count();
+    expect(strip).not.toBeNull();
+    const stripRight = strip!.x + strip!.width;
+    for (let i = 0; i < count; i++) {
+      const b = await bars.nth(i).boundingBox();
+      if (!b) continue;
+      const air = stripRight - (b.x + b.width);
+      // More than the previous 7px on the text side; comfortably under the strip width.
+      expect(air, `bar ${i} side air`).toBeGreaterThan(8);
+    }
+  });
+
+  // Q4 — inactive bars must render at an IDENTICAL height and land on INTEGER y positions (they used to
+  // land on half-pixels at the user's zoom and look unevenly bold). The current bar is exempt (bolder).
+  async function assertUniformIntegerBars(scope: 'editor' | 'viewer'): Promise<void> {
+    const { win } = joplin;
+    let bars;
+    if (scope === 'editor') {
+      bars = win.locator(`${EDITOR_STRIP} .ridgeline-bar`);
+    } else {
+      await ensureViewerVisible(win);
+      bars = win.frameLocator(VIEWER_IFRAME).locator('#ridgeline-viewer-strip .ridgeline-bar');
+    }
+    const data = await bars.evaluateAll((els) =>
+      els.map((el) => {
+        const r = (el as HTMLElement).getBoundingClientRect();
+        return { current: el.classList.contains('is-current'), height: Math.round(r.height * 100) / 100, top: r.top };
+      })
+    );
+    expect(data.length).toBeGreaterThan(2);
+    const inactive = data.filter((d) => !d.current);
+    expect(inactive.length).toBeGreaterThan(1);
+    // All inactive bars render at an IDENTICAL height (the Q4 "some look bolder" fix).
+    const heights = inactive.map((d) => d.height);
+    expect(Math.max(...heights) - Math.min(...heights), `${scope}: inactive bar heights identical`).toBe(0);
+    // Every bar (current included) sits on an INTEGER y pixel.
+    for (const d of data) {
+      expect(Math.abs(d.top - Math.round(d.top)), `${scope}: bar top ${d.top} is integer`).toBeLessThan(0.02);
+    }
+    // ALL bars (current included — its extra height grows downward, its top does not move) are laid out
+    // on a single constant INTEGER pitch, so no bar is nudged off the grid.
+    const tops = data.map((d) => Math.round(d.top)).sort((a, b) => a - b);
+    const gaps = tops.slice(1).map((t, i) => t - tops[i]);
+    if (gaps.length > 1) {
+      expect(Math.max(...gaps) - Math.min(...gaps), `${scope}: uniform integer pitch`).toBe(0);
+    }
+  }
+
+  test('Q4: editor inactive bars are uniform height on integer y positions', async () => {
+    await scrollEditorTo(joplin.win, 0);
+    await assertUniformIntegerBars('editor');
+  });
+
+  test('Q4: viewer inactive bars are uniform height on integer y positions', async () => {
+    await assertUniformIntegerBars('viewer');
   });
 
   // D1 — the current bar (bold/tall + is-current) moves as the viewport top passes headings.
@@ -202,25 +267,51 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     });
   });
 
-  // P4 — the viewer TOC rows must show a pointer cursor too, asserted on the element
-  // document.elementFromPoint actually returns at the row centre (the displayed-cursor source).
-  test('P4: viewer TOC rows show a pointer cursor on the hit element', async () => {
+  // Q3 (viewer) — the viewer TOC rows must show a pointer cursor too, sampled at MULTIPLE points and
+  // asserted on the element document.elementFromPoint actually returns (the displayed-cursor source).
+  // The viewer strip already lives in the note iframe body (outside any editor), so this locks that it
+  // stays a clean pointer surface.
+  test('Q3: every sampled viewer panel point resolves to a pointer cursor', async () => {
     const { win } = joplin;
     const frame = await ensureViewerVisible(win);
-    // Side may be 'right' from the previous test; hover the viewer bar stack to expand the panel.
+    // Side may be 'right' from the previous test; hover the viewer bar stack to expand the panel (after
+    // the Q2 dwell).
     const bars = frame.locator('#ridgeline-viewer-strip .ridgeline-bars');
     await expect(bars).toBeVisible({ timeout: 15_000 });
     await bars.hover();
     await expect(frame.locator('#ridgeline-viewer-strip')).toHaveAttribute('data-expanded', 'true', {
       timeout: 5_000,
     });
-    const row = frame.locator('#ridgeline-viewer-strip .ridgeline-panel-row').nth(2);
-    await row.hover();
-    const hit = await row.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      const target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return { tag: target?.tagName ?? null, cls: target?.className ?? null, cursor: target ? getComputedStyle(target).cursor : null };
+    const samples = await frame.evaluate(() => {
+      const panel = document.querySelector('#ridgeline-viewer-strip .ridgeline-panel') as HTMLElement | null;
+      const rows = Array.from(document.querySelectorAll('#ridgeline-viewer-strip .ridgeline-panel-row')) as HTMLElement[];
+      const out: { label: string; tag: string | null; cls: string; cursor: string | null; insidePanel: boolean; blockedBy: string | null }[] = [];
+      if (!panel) return out;
+      const pr = panel.getBoundingClientRect();
+      const probe = (label: string, x: number, y: number) => {
+        const t = document.elementFromPoint(x, y) as HTMLElement | null;
+        const insidePanel = !!t && (t === panel || panel.contains(t));
+        let blockedBy: string | null = null;
+        let el: HTMLElement | null = t;
+        for (let i = 0; el && i < 12; i++, el = el.parentElement) {
+          if (getComputedStyle(el).pointerEvents === 'none') blockedBy = `${el.tagName}.${el.className}`;
+          if (el === panel) break;
+        }
+        out.push({ label, tag: t?.tagName ?? null, cls: (t?.className || '').toString(), cursor: t ? getComputedStyle(t).cursor : null, insidePanel, blockedBy });
+      };
+      const row = rows[2] || rows[0];
+      const rr = row.getBoundingClientRect();
+      probe('row-textcenter', rr.left + rr.width / 2, rr.top + rr.height / 2);
+      probe('row-leftpad', rr.left + 2, rr.top + rr.height / 2);
+      probe('panel-padding', pr.left + 3, pr.top + 3);
+      probe('panel-innermid', pr.left + pr.width / 2, pr.top + pr.height / 2);
+      return out;
     });
-    expect(hit.cursor, `viewer elementFromPoint hit <${hit.tag} class="${hit.cls}"> cursor`).toBe('pointer');
+    expect(samples.length).toBeGreaterThanOrEqual(4);
+    for (const s of samples) {
+      expect(s.insidePanel, `${s.label}: hit <${s.tag} class="${s.cls}"> is the panel/descendant`).toBe(true);
+      expect(s.cursor, `${s.label}: viewer hit <${s.tag} class="${s.cls}"> cursor`).toBe('pointer');
+      expect(s.blockedBy, `${s.label}: pointer-events:none between hit and panel`).toBeNull();
+    }
   });
 });
