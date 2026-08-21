@@ -1,0 +1,98 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Fast gate: type-check and build the plugin. Ridgeline has no unit-harness layer (the whole plugin
+  # is exercised by the real-app E2E suite below), so the fast checks are `tsc --noEmit` plus a full
+  # `npm run dist` that must actually emit the .jpl. This is the job the publish workflow gates on.
+  build:
+    name: Type-check & build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # `npm ci` runs the `prepare` script, which itself runs `npm run dist` (and webpack's
+      # validateScreenshots over the manifest). Install with scripts, then type-check and rebuild
+      # explicitly so a build/type break fails here loudly and fast.
+      - run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Build the plugin
+        run: npm run dist
+      - name: Check the build produced the .jpl
+        run: |
+          PLUGIN_ID="$(node -p "require('./src/manifest.json').id")"
+          for FILE in "publish/$PLUGIN_ID.jpl" "publish/$PLUGIN_ID.json"; do
+            if [ ! -s "$FILE" ]; then
+              echo "::error::Expected $FILE to exist and be non-empty after npm run dist"
+              exit 1
+            fi
+          done
+          echo "Built publish/$PLUGIN_ID.jpl"
+
+  # Real-app E2E: launches the actual Joplin desktop (Electron) under Xvfb with the plugin loaded and
+  # drives the genuine GUI with Playwright. Deliberately kept out of the publish gate (see publish.yml):
+  # it downloads a ~150 MB Joplin build and takes minutes, so it runs on every push and PR here instead.
+  e2e:
+    name: Real-app E2E (Playwright + Joplin desktop)
+    needs: build
+    runs-on: ubuntu-24.04
+    # Playwright's own globalTimeout (playwright.config.ts) is 35 min: a stuck suite stops itself and
+    # still uploads its report/traces, rather than being hard-cancelled here (a cancel skips the
+    # upload). Keep this job cap comfortably above that so it only ever fires on a true runner hang.
+    timeout-minutes: 45
+    env:
+      # Must be >= the plugin's manifest app_min_version (3.3). Pinned to the user's real desktop
+      # (3.7.6) so the E2E environment reproduces the 3.7.x inline-rendering behaviour the specs assert
+      # against. Keep in sync with scripts/setup-e2e.sh, and used as the AppImage cache key below.
+      JOPLIN_E2E_VERSION: 3.7.6
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Electron is Chromium under the hood, so Playwright's chromium host deps cover Joplin too.
+      # Also install Xvfb for the virtual display the GUI requires.
+      - name: Install Electron/Chromium system dependencies + Xvfb
+        run: |
+          sudo npx playwright install-deps chromium
+          sudo apt-get install -y xvfb
+
+      # Cache the downloaded Joplin AppImage so reruns skip the download. setup-e2e.sh re-extracts it
+      # (fast) when the squashfs-root is absent, so only the AppImage itself needs caching.
+      - name: Cache Joplin AppImage
+        uses: actions/cache@v4
+        with:
+          path: .e2e-cache/Joplin.AppImage
+          key: joplin-appimage-${{ env.JOPLIN_E2E_VERSION }}
+
+      # Builds the plugin (npm run dist), downloads + extracts Joplin (npm run setup:e2e), then runs the
+      # Playwright suite under a virtual display (xvfb-run). A single unsharded run is fine in CI.
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report & traces
+        # Always upload, including on failure or timeout — the traces are the whole point of the
+        # artifact and are needed precisely when something went wrong.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

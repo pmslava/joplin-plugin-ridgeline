@@ -1,0 +1,169 @@
+name: Publish to npm
+
+# Publishes the plugin package to npm. Runs when a GitHub Release is published, or manually.
+# This mirrors joplin-plugin-cockpit's publish pipeline.
+#
+# Authentication uses npm trusted publishing (OIDC): there is no NPM_TOKEN secret. Instead, npm is
+# told to trust this repository and this workflow file, and the job exchanges a short lived GitHub
+# OIDC token for publish rights. Before the first run, configure the trusted publisher once at
+# npmjs.com -> the package -> Settings -> Trusted publisher, with:
+#
+#   Provider:    GitHub Actions
+#   Owner:       pmslava
+#   Repository:  joplin-plugin-ridgeline
+#   Workflow:    publish.yml
+#   Environment: npm
+#
+# The environment name has to match on both sides. GitHub only puts an `environment` claim into the
+# OIDC token when the job declares `environment:`, so if npm expects one and the job does not declare
+# it, the token does not match the trusted publisher, npm falls back to token authentication and the
+# publish fails with ENEEDAUTH.
+#
+# Notes:
+#  - setup-node is deliberately used WITHOUT `registry-url`. Given that input it always writes
+#    `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into .npmrc and exports a placeholder
+#    token, and npm then treats authentication as already configured and never starts the OIDC
+#    exchange (actions/setup-node#1551). Without it there is no .npmrc, and npm publishes to the
+#    default registry, which is registry.npmjs.org anyway.
+#  - NODE_AUTH_TOKEN is deliberately not set, for the same reason.
+#  - Provenance attestations are generated automatically when publishing this way, so `--provenance`
+#    is not passed.
+#  - Trusted publishing only works on GitHub hosted runners.
+#  - The real-app E2E suite is deliberately NOT part of this workflow's gate: it downloads a ~150 MB
+#    Joplin build and takes minutes, so it runs on every push and pull request (tests.yml) instead.
+#    The publish is gated only on the fast type-check-and-build job below.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & publish to npm
+    runs-on: ubuntu-24.04
+    # Must match the environment configured on the npm trusted publisher.
+    environment: npm
+    permissions:
+      contents: read
+      # Lets the job mint the OIDC token that npm exchanges for publish rights.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Resolve the version to publish: on a Release, take it from the tag (e.g. v0.2.7 -> 0.2.7);
+      # otherwise (manual workflow_dispatch) use the existing package.json version. The resolved
+      # version is written into BOTH package.json (the npm package version) and src/manifest.json
+      # (the version baked into the built .jpl plugin), keeping them in sync.
+      - name: Resolve package & manifest version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "Using release tag version: $VERSION (from $GITHUB_REF_NAME)"
+          else
+            VERSION="$(node -p "require('./package.json').version")"
+            echo "No release tag (event=${{ github.event_name }}); using package.json version: $VERSION"
+          fi
+          # package.json (--no-git-tag-version: edit only, no commit/tag; --allow-same-version: no-op-safe).
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # src/manifest.json (preserves the tab indentation the file uses).
+          VERSION="$VERSION" node -e "const fs=require('fs');const p='src/manifest.json';const m=JSON.parse(fs.readFileSync(p,'utf8'));m.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(m,null,'\t')+'\n');console.log('manifest.json version ->',m.version)"
+          echo "PUBLISH_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      # Gate the publish on the fast checks: type-check plus a full build. The real-app E2E suite is
+      # not run here (see the header note); it runs on every push and pull request in tests.yml.
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      # Build the publishable artifact (webpack -> ./publish, the only dir in package.json "files").
+      - run: npm run dist
+
+      # The Joplin plugin repository picks packages up from npm by the "joplin-plugin" keyword and
+      # installs the .jpl found in the published tarball, so fail loudly rather than publish a package
+      # that would be silently useless.
+      - name: Check the package contains the built plugin
+        run: |
+          PLUGIN_ID="$(node -p "require('./src/manifest.json').id")"
+          for FILE in "publish/$PLUGIN_ID.jpl" "publish/$PLUGIN_ID.json"; do
+            if [ ! -s "$FILE" ]; then
+              echo "::error::Expected $FILE to exist and be non-empty after npm run dist"
+              exit 1
+            fi
+          done
+          echo "Packing $(node -p "require('./package.json').name")@$PUBLISH_VERSION:"
+          npm pack --dry-run --ignore-scripts
+
+      # Switch the registry-facing steps to a runtime supported by npm trusted publishing (Node 22.14.0
+      # or newer). Node 24 also satisfies npm 11's engine requirements below.
+      - name: Use a current Node runtime for trusted publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Trusted publishing requires npm 11.5.1 or later. Stay on npm 11 for reproducible behaviour.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g 'npm@^11.5.1'
+          echo "node $(node --version), npm $(npm --version)"
+
+      # Prints the OIDC claims npm will present (never the token itself). A mismatch against the
+      # trusted publisher configured on npmjs.com is the usual cause of an otherwise-silent ENEEDAUTH,
+      # so each claim here has to equal what the trusted publisher says.
+      - name: Show the OIDC claims npm will present
+        run: |
+          node -e "
+          (async () => {
+            const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+            url.searchParams.set('audience', 'npm:registry.npmjs.org');
+            const response = await fetch(url, { headers: {
+              Authorization: 'Bearer ' + process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
+              Accept: 'application/json',
+            } });
+            const body = await response.json();
+            if (!body.value) {
+              console.log('No id_token returned, status ' + response.status);
+              return;
+            }
+            const payload = JSON.parse(Buffer.from(body.value.split('.')[1], 'base64').toString('utf8'));
+            for (const claim of ['sub', 'aud', 'repository', 'repository_owner', 'workflow_ref', 'job_workflow_ref', 'environment', 'ref', 'repository_visibility']) {
+              console.log(claim.padEnd(24) + (payload[claim] === undefined ? '(absent)' : payload[claim]));
+            }
+
+            // Run the same exchange npm runs, purely to read the registry's reason out loud.
+            const name = require('./package.json').name;
+            const exchange = 'https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/' + encodeURIComponent(name);
+            const result = await fetch(exchange, {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + body.value, 'Content-Type': 'application/json' },
+            });
+            const raw = await result.text();
+            let message = raw.slice(0, 300);
+            try { message = JSON.parse(raw).message ?? message; } catch {}
+            console.log('');
+            console.log('token exchange for ' + name + ': HTTP ' + result.status);
+            console.log('registry says:  ' + (result.ok ? '(exchange succeeded)' : message));
+          })()
+          "
+
+      - name: Publish to npm
+        run: |
+          # Fail with something readable rather than an authentication error further down.
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::No OIDC token endpoint available. The job needs 'permissions: id-token: write'."
+            exit 1
+          fi
+          if npm config get //registry.npmjs.org/:_authToken 2>/dev/null | grep -qv '^undefined$'; then
+            echo "::warning::An auth token is configured. npm may use it instead of trusted publishing."
+          fi
+          echo "Registry: $(npm config get registry)"
+          echo "Publishing $(node -p "require('./package.json').name")@$PUBLISH_VERSION via OIDC"
+          # --ignore-scripts avoids rebuilding via the "prepare" hook since we just built above.
+          # --loglevel=verbose is what makes npm report why the OIDC exchange failed (otherwise a
+          # rejected exchange is silent and surfaces only as ENEEDAUTH). Tokens are never printed.
+          npm publish --ignore-scripts --loglevel=verbose
