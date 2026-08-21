@@ -39,7 +39,7 @@ async function registerSettings(): Promise<void> {
 	await joplin.settings.registerSection(SETTINGS_SECTION, {
 		label: 'Ridgeline',
 		iconName: 'fas fa-mountain',
-		description: 'Ridgeline minimap outline (smoke build).',
+		description: 'A hover-expanding minimap outline for the editor and viewer.',
 	});
 
 	await joplin.settings.registerSettings({

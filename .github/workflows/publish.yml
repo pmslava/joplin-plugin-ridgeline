@@ -167,3 +167,47 @@ jobs:
           # --loglevel=verbose is what makes npm report why the OIDC exchange failed (otherwise a
           # rejected exchange is silent and surfaces only as ENEEDAUTH). Tokens are never printed.
           npm publish --ignore-scripts --loglevel=verbose
+
+  # Attach the built .jpl to the GitHub Release so the README's "download it from the releases page"
+  # instructions are true no matter how the release was cut (e.g. `gh release create vX.Y.Z` with no
+  # asset). Runs only on a real Release, in its own job with a minimal `contents: write` scope so the
+  # npm-publish job above keeps `contents: read`.
+  attach-jpl:
+    name: Attach the built .jpl to the release
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      # Needed to upload a release asset.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Rebuild the version into src/manifest.json from the tag so the attached .jpl matches the
+      # release, exactly as the publish job does (the two jobs run independently).
+      - name: Resolve manifest version from the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="$VERSION" node -e "const fs=require('fs');const p='src/manifest.json';const m=JSON.parse(fs.readFileSync(p,'utf8'));m.version=process.env.VERSION;fs.writeFileSync(p,JSON.stringify(m,null,'\t')+'\n');console.log('manifest.json version ->',m.version)"
+
+      - run: npm ci
+
+      - run: npm run dist
+
+      - name: Upload the .jpl as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PLUGIN_ID="$(node -p "require('./src/manifest.json').id")"
+          JPL="publish/$PLUGIN_ID.jpl"
+          if [ ! -s "$JPL" ]; then
+            echo "::error::Expected $JPL to exist and be non-empty after npm run dist"
+            exit 1
+          fi
+          # --clobber so re-running the workflow replaces the asset rather than failing on a duplicate.
+          gh release upload "$GITHUB_REF_NAME" "$JPL" --clobber
+          echo "Attached $JPL to release $GITHUB_REF_NAME"

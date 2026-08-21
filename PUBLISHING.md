@@ -33,9 +33,13 @@ do that first release by hand with `npm publish` and your YubiKey.
     `JOPLIN_E2E_VERSION` and uploads its report/traces on failure.
 
 - **`.github/workflows/publish.yml`** runs on a published GitHub Release (or manually via
-  `workflow_dispatch`). It resolves the version from the tag, writes it into both `package.json` and
-  `src/manifest.json`, runs the **fast gate only** (`tsc --noEmit` + `npm run dist` + the `.jpl` check),
-  and then publishes to npm.
+  `workflow_dispatch`). Its **publish** job resolves the version from the tag, writes it into both
+  `package.json` and `src/manifest.json`, runs the **fast gate only** (`tsc --noEmit` + `npm run dist`
+  + the `.jpl` check), and then publishes to npm. On a real Release it also runs a second **attach-jpl**
+  job that rebuilds the plugin and uploads `publish/io.github.pmslava.ridgeline.jpl` to the release as a
+  downloadable asset (so the README's "download it from the releases page" path works even if you cut the
+  release with a bare `gh release create` and no asset). That job carries its own minimal
+  `contents: write` scope, keeping the npm-publish job at `contents: read`.
 
 **Why E2E is deliberately excluded from the publish gate:** the E2E job downloads a ~150 MB Joplin build
 and launches it many times — minutes of work that would make every release slow and flaky for no added
@@ -76,7 +80,12 @@ git commit -m "Bump to vX.Y.Z"
 git push origin main
 
 # 2. cut the release (this is what triggers publish.yml)
-gh release create vX.Y.Z --title "vX.Y.Z" --notes "…"
+#    Attach the freshly built .jpl so it is downloadable from the releases page immediately.
+#    (The publish workflow's attach-jpl job also uploads it automatically, with --clobber, as a
+#    safety net — so a bare `gh release create vX.Y.Z --title "vX.Y.Z" --notes "…"` still ends up
+#    with the asset once CI finishes.)
+npm run dist
+gh release create vX.Y.Z publish/io.github.pmslava.ridgeline.jpl --title "vX.Y.Z" --notes "…"
 ```
 
 Publishing a release fires `publish.yml`. Watch it in the Actions tab; the **"Show the OIDC claims npm
@@ -104,6 +113,7 @@ On **npmjs.com → the `joplin-plugin-ridgeline` package → Settings → Truste
 | Repository | `joplin-plugin-ridgeline` |
 | Workflow | `publish.yml` |
 | Environment | `npm` |
+| Allowed actions | `npm publish` |
 
 The **Environment** name must match on both sides. GitHub only adds an `environment` claim to the OIDC
 token when the job declares `environment:` — `publish.yml` declares `environment: npm`, so npm must be
