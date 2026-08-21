@@ -23,7 +23,6 @@
 		levelLengths: { 1: 20, 2: 17, 3: 14, 4: 11, 5: 8, 6: 6 },
 		barHeight: 3,
 		currentBarHeight: 5,
-		currentBarLengthBoostPx: 4,
 		barGap: 4,
 		minBarGap: 1,
 		normalOpacity: 0.45,
@@ -42,7 +41,7 @@
 		pollMs: 700,
 	};
 
-	var settings = { side: 'left', viewerMode: 'overlay', maxDepth: 6, showMinimap: true };
+	var settings = { side: 'left', viewerMode: 'overlay', maxDepth: 6, showMinimap: true, hideWhenEmpty: true };
 	var tokens = FALLBACK_TOKENS;
 	var currentSig = null;
 	var buildTimer = null;
@@ -157,6 +156,8 @@
 					settings.maxDepth = isFinite(d) ? Math.min(6, Math.max(1, Math.round(d))) : 6;
 					// Z2: default true; only an explicit `false` hides the strip.
 					settings.showMinimap = result.showMinimap !== false;
+					// W3: default true; only an explicit `false` keeps the strip on a heading-less note.
+					settings.hideWhenEmpty = result.hideWhenEmpty !== false;
 					if (result.tokens) tokens = result.tokens;
 				}
 			})
@@ -164,7 +165,7 @@
 	}
 
 	function settingsSignature() {
-		return JSON.stringify({ s: settings.side, m: settings.viewerMode, d: settings.maxDepth, v: settings.showMinimap, t: tokens });
+		return JSON.stringify({ s: settings.side, m: settings.viewerMode, d: settings.maxDepth, v: settings.showMinimap, e: settings.hideWhenEmpty, t: tokens });
 	}
 
 	function applyReserveMargin() {
@@ -222,18 +223,19 @@
 		if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 		teardown();
 
-		// Z2: hidden — leave nothing mounted (all listeners torn down by teardown) and drop any reserve
-		// margin so the note text reclaims the space.
-		if (!settings.showMinimap) {
-			document.body.style.marginLeft = '';
-			document.body.style.marginRight = '';
-			return;
-		}
-
 		var colors = computeColors();
 		var headings = headingElements();
 		var count = headings.length;
 		var side = settings.side;
+
+		// Z2/W3: not shown — leave nothing mounted (all listeners torn down by teardown) and drop any
+		// reserve margin so the note text reclaims the space. Hidden when the master toggle is off, or
+		// (W3) when the note has no headings and hideWhenEmpty is on.
+		if (!settings.showMinimap || (settings.hideWhenEmpty && count === 0)) {
+			document.body.style.marginLeft = '';
+			document.body.style.marginRight = '';
+			return;
+		}
 
 		var el = document.createElement('div');
 		el.id = STRIP_ID;
@@ -266,6 +268,11 @@
 		var pitch = tokens.barHeight + currentGap(count);
 		var dpr = window.devicePixelRatio || 1;
 		var deviceSnap = function (px) { return Math.round(px * dpr) / dpr; };
+		// W2: the current bar is centred in its slot (top shifted up by half the thickness delta). The
+		// whole grid is offset down by that same `pad` so the centred current bar never clips the top:
+		// an inactive bar's slot top is i*pitch+pad, and the current bar sits at i*pitch. Both are
+		// device-snapped, so every bar's top still lands on an exact integer device pixel at any zoom.
+		var centerPad = (tokens.currentBarHeight - tokens.barHeight) / 2;
 		var barsWrap = document.createElement('div');
 		barsWrap.className = 'ridgeline-bars';
 		var bw = barsWrap.style;
@@ -274,7 +281,7 @@
 		bw.maxHeight = '100%';
 		bw.width = '100%';
 		bw.boxSizing = 'border-box';
-		bw.height = (count > 0 ? deviceSnap((count - 1) * pitch) + tokens.currentBarHeight : 0) + 'px';
+		bw.height = (count > 0 ? deviceSnap((count - 1) * pitch + centerPad) + tokens.currentBarHeight : 0) + 'px';
 		// R6: the bar stack is the hover trigger zone and is interactive.
 		bw.pointerEvents = 'auto';
 		bw.cursor = 'pointer';
@@ -332,7 +339,8 @@
 			// Q4: absolute on an integer pitch, right-aligned via `right` (flush right edge, ragged left).
 			b.position = 'absolute';
 			b.right = barSideAir() + 'px';
-			b.top = deviceSnap(index * pitch) + 'px';
+			// Inactive slot top (updateActive re-centres the current one). W2: offset by centerPad.
+			b.top = deviceSnap(index * pitch + centerPad) + 'px';
 			b.height = tokens.barHeight + 'px';
 			b.width = tokenLength(level) + 'px';
 			b.background = colors.normalBar;
@@ -397,11 +405,15 @@
 			for (var i = 0; i < bars.length; i++) {
 				var isCur = i === active;
 				bars[i].classList.toggle('is-current', isCur);
-				// R3: the current bar is clearly bolder — brighter, thicker, AND a touch longer.
+				// W1: the current bar is bolder via THICKNESS + a brighter colour only — it keeps EXACTLY
+				// its level's length (no boost), so a deeper heading never reads as a shallower one.
 				bars[i].style.background = isCur ? colors.currentBar : colors.normalBar;
 				bars[i].style.height = (isCur ? tokens.currentBarHeight : tokens.barHeight) + 'px';
 				var lvl = Number(headings[i].tagName.substring(1));
-				bars[i].style.width = (tokenLength(lvl) + (isCur ? (tokens.currentBarLengthBoostPx || 0) : 0)) + 'px';
+				bars[i].style.width = tokenLength(lvl) + 'px';
+				// W2: centre the current bar in its slot (top up by centerPad); neighbours stay put.
+				var slotTop = i * pitch + centerPad;
+				bars[i].style.top = deviceSnap(isCur ? slotTop - centerPad : slotTop) + 'px';
 				if (isCur) bars[i].setAttribute('data-current', 'true');
 				else bars[i].removeAttribute('data-current');
 			}

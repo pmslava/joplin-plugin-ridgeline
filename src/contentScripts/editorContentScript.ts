@@ -81,9 +81,12 @@ interface SurfaceColors {
 function reserveTheme(
 	settings: RidgelineSettings,
 	tokens: RidgelineTokens,
+	visible: boolean,
 ): ReturnType<typeof EditorView.theme> {
-	// Z2: a hidden strip reserves no margin — there is nothing to keep the text clear of.
-	if (settings.editorMode !== 'reserve' || !settings.showMinimap) {
+	// Z2/W3: a strip that is not actually shown reserves no margin — there is nothing to keep the text
+	// clear of. `visible` folds in both the master showMinimap toggle AND the W3 hide-when-empty rule
+	// (heading-less note + hideWhenEmpty), so an empty note in reserve mode reclaims the full width.
+	if (settings.editorMode !== 'reserve' || !visible) {
 		return EditorView.theme({});
 	}
 	const pad = `${stripTotalWidth(tokens) + tokens.edgeGapPx}px`;
@@ -418,13 +421,27 @@ class EditorStrip {
 		return Math.round(px * dpr) / dpr;
 	}
 
+	// W2: the current bar is thicker (currentBarHeight vs barHeight); to keep it CENTRED in its pitch
+	// slot rather than growing downward from the slot top, its top is shifted up by half the thickness
+	// delta. To keep that upward shift from clipping the topmost bar against the barsWrap top edge, the
+	// whole grid is offset down by that same amount (`pad`): an inactive bar's slot top is i*pitch+pad,
+	// and the current bar sits at (i*pitch+pad) − pad = i*pitch. Both are device-snapped so every bar's
+	// top still lands on an exact integer DEVICE pixel (phase 0 — the Z1 discipline) at any zoom, and
+	// inactive neighbours never move as the current bar changes.
+	private centerPad(): number {
+		return (this.tokens.currentBarHeight - this.tokens.barHeight) / 2;
+	}
+
 	private layoutBars(): void {
 		const pitch = this.pitch();
+		const pad = this.centerPad();
 		for (let i = 0; i < this.bars.length; i++) {
-			this.bars[i].style.top = `${this.deviceSnap(i * pitch)}px`;
+			const slotTop = i * pitch + pad;
+			const isCurrent = i === this.activeIndex;
+			this.bars[i].style.top = `${this.deviceSnap(isCurrent ? slotTop - pad : slotTop)}px`;
 		}
 		const n = this.bars.length;
-		const boxHeight = n > 0 ? this.deviceSnap((n - 1) * pitch) + this.tokens.currentBarHeight : 0;
+		const boxHeight = n > 0 ? this.deviceSnap((n - 1) * pitch + pad) + this.tokens.currentBarHeight : 0;
 		this.barsWrap.style.height = `${boxHeight}px`;
 	}
 
@@ -549,10 +566,12 @@ class EditorStrip {
 
 	public update(): void {
 		this.reposition();
-		this.layoutBars();
 
+		// Compute the active heading BEFORE laying out the bars, so layoutBars can centre THIS frame's
+		// current bar (W2) rather than the previous frame's.
 		const active = this.computeActiveIndex();
 		this.activeIndex = active;
+		this.layoutBars();
 
 		if (active < 0) {
 			this.container.setAttribute('data-active-index', '');
@@ -566,11 +585,12 @@ class EditorStrip {
 			const bar = this.bars[i];
 			const isCurrent = i === active;
 			bar.classList.toggle('is-current', isCurrent);
-			// R3: the current bar is clearly bolder — brighter, thicker, AND a touch longer.
+			// W1: the current bar is bolder via THICKNESS + a brighter colour only — it keeps EXACTLY its
+			// level's length (no boost), so a deeper heading never reads as a shallower one. Its top is
+			// centred in the slot by layoutBars (W2); here we set only colour, thickness and level width.
 			bar.style.background = isCurrent ? this.colors.currentBar : this.colors.normalBar;
 			bar.style.height = `${isCurrent ? this.tokens.currentBarHeight : this.tokens.barHeight}px`;
-			const baseLen = barLengthFor(this.tokens, this.headings[i].level);
-			bar.style.width = `${baseLen + (isCurrent ? this.tokens.currentBarLengthBoostPx : 0)}px`;
+			bar.style.width = `${barLengthFor(this.tokens, this.headings[i].level)}px`;
 			if (isCurrent) bar.setAttribute('data-current', 'true');
 			else bar.removeAttribute('data-current');
 		}
@@ -699,7 +719,10 @@ function coerceSettings(raw: Partial<RidgelineSettings> | null | undefined): Rid
 	maxDepth = Math.min(6, Math.max(1, Math.round(maxDepth)));
 	// Default true: only an explicit `false` hides the strip.
 	const showMinimap = raw?.showMinimap !== false;
-	return { side, editorMode, viewerMode, maxDepth, showMinimap };
+	// W3: default true — only an explicit `false` keeps the strip (and reserve margin) on a note that
+	// has no headings.
+	const hideWhenEmpty = raw?.hideWhenEmpty !== false;
+	return { side, editorMode, viewerMode, maxDepth, showMinimap, hideWhenEmpty };
 }
 
 export default (context: ContentScriptContext): MarkdownEditorContentScriptModule => ({
@@ -735,27 +758,61 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			void context.postMessage({ type: 'jump', anchor: heading.slug, line: heading.line });
 		};
 
-		const rebuildHeadings = () => {
-			if (!strip) return;
-			strip.setHeadings(parseHeadings(view.state.doc.toString()));
+		// The last-parsed headings of the live document. Recomputed on every doc change; drives both the
+		// strip contents and the W3 empty-note visibility decision (0 headings → hide when hideWhenEmpty).
+		let lastHeadings: EditorHeading[] = parseHeadings(view.state.doc.toString());
+		const recomputeHeadings = () => {
+			lastHeadings = parseHeadings(view.state.doc.toString());
 		};
 
-		// Z2: reconcile the strip's presence with the showMinimap setting. Mount when it should be shown
-		// and is not; fully unmount (destroy → all listeners torn down) when it should be hidden; otherwise
-		// push the new settings into the live strip. Called on first load and on every live settings push.
+		// W3: the strip is actually shown only when the master toggle is on AND (the note has headings OR
+		// the user opted to keep the empty strip). showMinimap=false always wins (hidden); hideWhenEmpty
+		// off restores the pre-W3 behaviour (empty strip + reserve margin even with no headings).
+		const shouldShow = (): boolean => {
+			if (!currentSettings.showMinimap) return false;
+			if (currentSettings.hideWhenEmpty && lastHeadings.length === 0) return false;
+			return true;
+		};
+
+		// Reconfigure the reserve-margin theme to match the current visibility. Dispatches a transaction,
+		// so it must NOT be called from inside a CodeMirror update (see the updateListener, which defers).
+		const reconfigureReserve = () => {
+			view.dispatch({
+				effects: reserveCompartment.reconfigure(reserveTheme(currentSettings, currentTokens, shouldShow())),
+			});
+		};
+
+		// The last visibility decision actually applied, so a doc edit only mounts/unmounts (and re-themes)
+		// when it CROSSES the empty↔non-empty (or hidden↔shown) boundary — typing more text within an
+		// already-headed note never churns the strip.
+		let lastVisible: boolean | null = null;
+
+		// Z2/W3: reconcile the strip's presence + reserve margin with the resolved visibility. Mount when
+		// it should be shown and is not; fully unmount (destroy → all listeners torn down) when it should
+		// be hidden; otherwise push the new settings into the live strip. Called on first load, on every
+		// live settings push, and (deferred) whenever a doc edit crosses the visibility boundary.
 		const syncStrip = () => {
 			if (destroyed || !view.dom.isConnected) return;
-			if (currentSettings.showMinimap) {
+			if (shouldShow()) {
 				if (strip) {
 					strip.applySettings(currentSettings, currentTokens);
 				} else {
 					strip = new EditorStrip(view, currentSettings, currentTokens, onJump);
-					rebuildHeadings();
 				}
+				strip.setHeadings(lastHeadings);
 			} else if (strip) {
 				strip.destroy();
 				strip = null;
 			}
+		};
+
+		// Apply the current visibility to BOTH the reserve margin and the strip mount state, and record it.
+		// Safe to call only outside a CodeMirror update (it dispatches via reconfigureReserve).
+		const applyVisibility = () => {
+			if (destroyed || !view.dom.isConnected) return;
+			reconfigureReserve();
+			syncStrip();
+			lastVisible = shouldShow();
 		};
 
 		// A signature of the last-applied settings+tokens, so the poll (below) only re-applies on a real
@@ -773,10 +830,8 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			currentSettings = next;
 			currentTokens = nextTokens;
 			if (destroyed || !view.dom.isConnected) return;
-			view.dispatch({
-				effects: reserveCompartment.reconfigure(reserveTheme(currentSettings, currentTokens)),
-			});
-			syncStrip();
+			// Re-theme (reserve margin) and mount/unmount to match the new settings + current heading count.
+			applyVisibility();
 		};
 
 		// Live settings PUSH: the coordinator calls this on joplin.settings.onChange for the FOCUSED
@@ -804,10 +859,19 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		}, Math.max(200, currentTokens.pollMs || DESIGN_TOKENS.pollMs));
 
 		const updateListener = EditorView.updateListener.of((update: ViewUpdate) => {
-			if (!strip) return;
 			if (update.docChanged) {
-				rebuildHeadings();
-			} else if (update.geometryChanged || update.viewportChanged) {
+				recomputeHeadings();
+				// W3: a doc edit may have crossed the empty↔non-empty boundary (first heading typed, last
+				// heading deleted). Mounting/unmounting the strip is safe here, but reconfigureReserve
+				// dispatches — which is forbidden from inside an update — so defer the whole reconciliation
+				// out of the update cycle. When visibility is unchanged, just refresh the mounted strip's
+				// headings in place (no dispatch, no churn).
+				if (shouldShow() !== lastVisible) {
+					timerWin.setTimeout(() => applyVisibility(), 0);
+				} else if (strip) {
+					strip.setHeadings(lastHeadings);
+				}
+			} else if (strip && (update.geometryChanged || update.viewportChanged)) {
 				strip.update();
 			}
 		});
@@ -841,7 +905,7 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		})();
 
 		editorControl.addExtension([
-			reserveCompartment.of(reserveTheme(coerceSettings(null), DESIGN_TOKENS)),
+			reserveCompartment.of(reserveTheme(coerceSettings(null), DESIGN_TOKENS, shouldShow())),
 			updateListener,
 			lifecycle,
 		]);

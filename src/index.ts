@@ -14,6 +14,7 @@ import {
 	HOVER_OPEN_DELAY_MIN,
 	PLUGIN_ID,
 	SETTING_EDITOR_MODE,
+	SETTING_HIDE_WHEN_EMPTY,
 	SETTING_HOVER_OPEN_DELAY,
 	SETTING_MAX_DEPTH,
 	SETTING_SHOW_MINIMAP,
@@ -97,6 +98,18 @@ async function registerSettings(): Promise<void> {
 				'disabling the plugin (Tools → Ridgeline: Toggle minimap, or Ctrl+Alt+M). Applies live.',
 			storage: SettingStorage.File,
 		},
+		[SETTING_HIDE_WHEN_EMPTY]: {
+			value: true,
+			type: SettingItemType.Bool,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Hide minimap when the note has no headings',
+			description:
+				'On a note with no headings, hide the strip and drop its reserved margin entirely (in both ' +
+				'the editor and viewer) so the text uses the full width. Turn off to keep the empty strip. ' +
+				'Applies live.',
+			storage: SettingStorage.File,
+		},
 		[SETTING_HOVER_OPEN_DELAY]: {
 			value: DESIGN_TOKENS.hoverOpenDelayMs,
 			type: SettingItemType.Int,
@@ -121,6 +134,7 @@ async function readSettings(): Promise<RidgelineSettings> {
 		SETTING_VIEWER_MODE,
 		SETTING_MAX_DEPTH,
 		SETTING_SHOW_MINIMAP,
+		SETTING_HIDE_WHEN_EMPTY,
 	]);
 	// Coerce defensively — a seeded/edited settings.json could carry an unexpected value.
 	const side: Side = values[SETTING_SIDE] === 'right' ? 'right' : 'left';
@@ -131,7 +145,9 @@ async function readSettings(): Promise<RidgelineSettings> {
 	maxDepth = Math.min(6, Math.max(1, Math.round(maxDepth)));
 	// Default true: only an explicit stored `false` hides the strip.
 	const showMinimap = values[SETTING_SHOW_MINIMAP] !== false;
-	return { side, editorMode, viewerMode, maxDepth, showMinimap };
+	// W3: default true; only an explicit stored `false` keeps the strip on a heading-less note.
+	const hideWhenEmpty = values[SETTING_HIDE_WHEN_EMPTY] !== false;
+	return { side, editorMode, viewerMode, maxDepth, showMinimap, hideWhenEmpty };
 }
 
 // The getSettings answer both content scripts read: resolved settings + the shared design tokens.

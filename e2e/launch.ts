@@ -44,6 +44,7 @@ export interface SeedSettings {
   viewerMode?: 'overlay' | 'reserve';
   maxDepth?: number;
   showMinimap?: boolean;
+  hideWhenEmpty?: boolean;
 }
 
 export function assertE2EReady(): void {
@@ -89,6 +90,7 @@ export function createProfile(loadPlugin = true, seed: SeedSettings = {}): strin
   if (seed.viewerMode) settings[`${prefix}viewerMode`] = seed.viewerMode;
   if (seed.maxDepth != null) settings[`${prefix}maxDepth`] = seed.maxDepth;
   if (seed.showMinimap != null) settings[`${prefix}showMinimap`] = seed.showMinimap;
+  if (seed.hideWhenEmpty != null) settings[`${prefix}hideWhenEmpty`] = seed.hideWhenEmpty;
 
   fs.writeFileSync(path.join(profileDir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf8');
   return profileDir;

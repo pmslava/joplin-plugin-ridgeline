@@ -11,12 +11,57 @@ import {
   hoverEditorBars,
   MIXED_HEADINGS,
   scrollEditorTo,
+  scrollViewerTo,
+  viewerCurrentHeading,
   SETEXT_REAL_HEADING_COUNT,
   waitForEditorStrip,
   EDITOR_STRIP,
   VIEWER_IFRAME,
 } from './helpers';
 import { DESIGN_TOKENS } from '../src/tokens';
+
+// W2 — bar geometry sample and the "current bar is centred in its slot" assertion, shared by the
+// editor and viewer W2 tests.
+interface BarGeo {
+  current: boolean;
+  top: number;
+  height: number;
+}
+
+// The current bar's vertical CENTRE must equal the centre an inactive bar would have in the same slot
+// (within 1 device px). Inactive bars sit on a straight line centre_i = a + b*i (slot centres on the
+// pitch); fit that line from the first and last inactive bars and predict the centre at the current
+// bar's index — the current bar must land on it, proving it is centred, not dropped toward a neighbour.
+function assertCurrentBarCentered(bars: BarGeo[], dpr: number, where: string): void {
+  expect(bars.length, `${where}: bar count`).toBeGreaterThan(2);
+  expect(bars.filter((b) => b.current).length, `${where}: exactly one current bar`).toBe(1);
+  const currentIdx = bars.findIndex((b) => b.current);
+  const centres = bars.map((b) => b.top + b.height / 2);
+  const inactiveIdx = bars.map((_, i) => i).filter((i) => !bars[i].current);
+  const i0 = inactiveIdx[0];
+  const i1 = inactiveIdx[inactiveIdx.length - 1];
+  const slope = (centres[i1] - centres[i0]) / (i1 - i0);
+  const predicted = centres[i0] + slope * (currentIdx - i0);
+  const deltaDevicePx = Math.abs(centres[currentIdx] - predicted) * dpr;
+  expect(
+    deltaDevicePx,
+    `${where}: current-bar centre (${centres[currentIdx].toFixed(2)}) matches its slot centre (${predicted.toFixed(2)}) within 1 device px`
+  ).toBeLessThanOrEqual(1);
+}
+
+// Every bar inactive in BOTH snapshots must keep the same top (within 1 device px): the bar that
+// gained/lost "current" may shift (it centres/uncentres), but its neighbours must not move.
+function assertNeighboursUnmoved(a: BarGeo[], b: BarGeo[], dpr: number, where: string): void {
+  expect(a.length, `${where}: same bar count`).toBe(b.length);
+  for (let i = 0; i < a.length; i++) {
+    if (!a[i].current && !b[i].current) {
+      expect(
+        Math.abs(a[i].top - b[i].top) * dpr,
+        `${where}: inactive bar ${i} unmoved (device px)`
+      ).toBeLessThanOrEqual(1);
+    }
+  }
+}
 
 /**
  * Phase-2 minimap behaviour on a note whose headings span H1..H6. One default launch covers the
@@ -37,21 +82,18 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     if (joplin) await closeJoplin(joplin);
   });
 
-  // The current-section bar carries a small length boost (R3, currentBarLengthBoostPx in tokens), so
-  // its rendered width is longer than its pure level width. Normalise that out to validate the
-  // per-level (base) length encoding.
-  const CURRENT_BAR_LENGTH_BOOST = DESIGN_TOKENS.currentBarLengthBoostPx;
-
-  // Returns the BASE bar length per bar (rendered width minus the current-bar boost, if current).
-  async function editorBaseBarWidths(): Promise<number[]> {
+  // W1: the current-section bar keeps EXACTLY its level's length — its prominence is thickness + a
+  // brighter colour only, NO length boost (an H3 must never read as an H2). So the rendered width IS
+  // the per-level length for every bar, current or not. (Round-4 subtracted a currentBarLengthBoostPx
+  // here; that token was removed this round, so there is nothing to normalise out.)
+  async function editorBarWidths(): Promise<number[]> {
     const { win } = joplin;
     const bars = win.locator(`${EDITOR_STRIP} .ridgeline-bar`);
     const count = await bars.count();
     const widths: number[] = [];
     for (let i = 0; i < count; i++) {
       const box = await bars.nth(i).boundingBox();
-      const isCurrent = (await bars.nth(i).getAttribute('class'))?.includes('is-current') ?? false;
-      widths.push(box ? box.width - (isCurrent ? CURRENT_BAR_LENGTH_BOOST : 0) : -1);
+      widths.push(box ? box.width : -1);
     }
     return widths;
   }
@@ -63,13 +105,14 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     expect(await joplin.win.locator(`${EDITOR_STRIP} .ridgeline-bar`).count()).toBe(
       MIXED_HEADINGS.length
     );
-    const widths = await editorBaseBarWidths();
+    const widths = await editorBarWidths();
     expect(widths.length).toBe(MIXED_HEADINGS.length);
     for (let i = 1; i < widths.length; i++) {
-      // Each deeper level's base bar is strictly shorter than the one above it.
+      // Each deeper level's bar is strictly shorter than the one above it.
       expect(widths[i - 1]).toBeGreaterThan(widths[i]);
     }
-    // Sanity-check the extremes against the tokens (H1 = longest, H6 = shortest).
+    // Sanity-check the extremes against the tokens (H1 = longest, H6 = shortest). widths[0] is the
+    // CURRENT bar at top-of-scroll (H1); W1: it equals its level length exactly — NOT boosted longer.
     expect(Math.round(widths[0])).toBe(DESIGN_TOKENS.levelLengths[1]);
     expect(Math.round(widths[widths.length - 1])).toBe(DESIGN_TOKENS.levelLengths[6]);
     // R9: the decrements are near-EQUAL (linear), so every adjacent pair is equally distinguishable.
@@ -126,12 +169,17 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     for (const d of data) {
       expect(Math.abs(d.top - Math.round(d.top)), `${scope}: bar top ${d.top} is integer`).toBeLessThan(0.02);
     }
-    // ALL bars (current included — its extra height grows downward, its top does not move) are laid out
-    // on a single constant INTEGER pitch, so no bar is nudged off the grid.
-    const tops = data.map((d) => Math.round(d.top)).sort((a, b) => a - b);
-    const gaps = tops.slice(1).map((t, i) => t - tops[i]);
+    // W2: the current bar is now CENTRED in its slot — its top is shifted UP by half the thickness delta,
+    // so its raw top is deliberately off the inactive grid. Reconstruct each bar's SLOT top (undo that
+    // shift for the current bar) and assert THOSE sit on a single constant INTEGER pitch — i.e. the
+    // inactive neighbours are on an even grid and the current bar occupies its slot centred, not nudged
+    // off it. (Round-4 asserted ALL raw tops were on one pitch because the current bar grew downward
+    // from the slot top; W2 changed that by design.)
+    const centerPad = (DESIGN_TOKENS.currentBarHeight - DESIGN_TOKENS.barHeight) / 2;
+    const slotTops = data.map((d) => Math.round(d.current ? d.top + centerPad : d.top)).sort((a, b) => a - b);
+    const gaps = slotTops.slice(1).map((t, i) => t - slotTops[i]);
     if (gaps.length > 1) {
-      expect(Math.max(...gaps) - Math.min(...gaps), `${scope}: uniform integer pitch`).toBe(0);
+      expect(Math.max(...gaps) - Math.min(...gaps), `${scope}: uniform integer pitch (slot tops)`).toBe(0);
     }
   }
 
@@ -171,6 +219,95 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
 
   test('Q4: viewer inactive bars are uniform height on integer y positions', async () => {
     await assertUniformIntegerBars('viewer');
+  });
+
+  // Sample the editor bar geometry (index order, with the current flag) at the current scroll.
+  async function readEditorBars(): Promise<{ dpr: number; bars: BarGeo[] }> {
+    return joplin.win.evaluate((sel) => {
+      const els = Array.from(document.querySelectorAll(`${sel} .ridgeline-bar`)) as HTMLElement[];
+      return {
+        dpr: window.devicePixelRatio,
+        bars: els.map((el) => {
+          const r = el.getBoundingClientRect();
+          return { current: el.classList.contains('is-current'), top: r.top, height: r.height };
+        }),
+      };
+    }, EDITOR_STRIP);
+  }
+
+  // W2 (editor) — the current bar is CENTRED in its pitch slot: its vertical centre equals the centre an
+  // inactive bar would have in the same slot, and its neighbours do not move when a DIFFERENT bar becomes
+  // current. Proven by toggling which bar is current (scroll top vs bottom) and comparing geometry.
+  test('W2: editor current bar is centred in its slot; neighbours unmoved when it changes', async () => {
+    const { win } = joplin;
+
+    // Snapshot A: scrolled to top → first heading is current.
+    await scrollEditorTo(win, 0);
+    await expect.poll(() => editorCurrentHeading(win), { timeout: 5_000 }).toBe(MIXED_HEADINGS[0].text);
+    const a = await readEditorBars();
+    expect(a.bars[0].current, 'first bar current at top-of-scroll').toBe(true);
+    assertCurrentBarCentered(a.bars, a.dpr, 'editor@top');
+
+    // Snapshot B: scrolled to the bottom → the LAST heading is current (a different bar).
+    await win.evaluate(() => {
+      const el = document.querySelector('.cm-scroller') as HTMLElement | null;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    await expect
+      .poll(() => editorCurrentHeading(win), { timeout: 5_000 })
+      .toBe(MIXED_HEADINGS[MIXED_HEADINGS.length - 1].text);
+    const b = await readEditorBars();
+    expect(b.bars[b.bars.length - 1].current, 'last bar current at bottom-of-scroll').toBe(true);
+    assertCurrentBarCentered(b.bars, b.dpr, 'editor@bottom');
+
+    // Neighbours (bars inactive in both snapshots) did not move as the current bar moved from first to
+    // last — only the two bars that changed current-state may shift.
+    assertNeighboursUnmoved(a.bars, b.bars, a.dpr, 'editor');
+
+    await scrollEditorTo(win, 0);
+  });
+
+  // W2 (viewer) — same centring + neighbours-unmoved guarantee on the rendered-note strip.
+  test('W2: viewer current bar is centred in its slot; neighbours unmoved when it changes', async () => {
+    const { win } = joplin;
+    const frame = await ensureViewerVisible(win);
+    await expect(frame.locator('#ridgeline-viewer-strip .ridgeline-bar').first()).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const readViewerBars = async (): Promise<{ dpr: number; bars: BarGeo[] }> =>
+      frame.evaluate(() => {
+        const els = Array.from(
+          document.querySelectorAll('#ridgeline-viewer-strip .ridgeline-bar')
+        ) as HTMLElement[];
+        return {
+          dpr: window.devicePixelRatio,
+          bars: els.map((el) => {
+            const r = el.getBoundingClientRect();
+            return { current: el.classList.contains('is-current'), top: r.top, height: r.height };
+          }),
+        };
+      });
+
+    // Snapshot A: viewer scrolled to top → first heading current.
+    await scrollViewerTo(win, 0);
+    await expect.poll(() => viewerCurrentHeading(win), { timeout: 10_000 }).toBe(MIXED_HEADINGS[0].text);
+    const a = await readViewerBars();
+    expect(a.bars[0].current, 'first viewer bar current at top-of-scroll').toBe(true);
+    assertCurrentBarCentered(a.bars, a.dpr, 'viewer@top');
+
+    // Snapshot B: viewer scrolled to the bottom → the LAST heading current.
+    await scrollViewerTo(win, 10_000_000);
+    await expect
+      .poll(() => viewerCurrentHeading(win), { timeout: 10_000 })
+      .toBe(MIXED_HEADINGS[MIXED_HEADINGS.length - 1].text);
+    const b = await readViewerBars();
+    expect(b.bars[b.bars.length - 1].current, 'last viewer bar current at bottom-of-scroll').toBe(true);
+    assertCurrentBarCentered(b.bars, b.dpr, 'viewer@bottom');
+
+    assertNeighboursUnmoved(a.bars, b.bars, a.dpr, 'viewer');
+
+    await scrollViewerTo(win, 0);
   });
 
   // D1 — the current bar (bold/tall + is-current) moves as the viewport top passes headings.

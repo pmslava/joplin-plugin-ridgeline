@@ -11,12 +11,12 @@ export interface RidgelineTokens {
 	// Bar LENGTH (px) by heading level. With only six levels a LINEAR progression (equal decrements)
 	// keeps every adjacent pair of levels equally distinguishable — 40/35/30/25/20/15, a 5px step.
 	levelLengths: { [level: number]: number };
-	// Bar thickness (px) for a normal bar and for the (clearly bolder) current-section bar.
+	// Bar thickness (px) for a normal bar and for the (clearly bolder) current-section bar. The current
+	// bar's prominence comes ONLY from this extra thickness plus its brighter colour — it keeps EXACTLY
+	// its level's length (W1: no length boost, so an H3 never reads as an H2), and it is CENTRED in its
+	// pitch slot (W2) rather than grown downward from the slot top.
 	barHeight: number;
 	currentBarHeight: number;
-	// Extra length (px) added to the CURRENT bar on top of its per-level length, so "where am I" is
-	// instantly visible (bolder = thicker + brighter + a touch longer).
-	currentBarLengthBoostPx: number;
 	// Vertical gap (px) between stacked bars, and the floor it may be compressed to when a note has
 	// so many headings the stack would overflow the pane.
 	barGap: number;
@@ -58,12 +58,11 @@ export const DESIGN_TOKENS: RidgelineTokens = {
 	levelLengths: { 1: 20, 2: 17, 3: 14, 4: 11, 5: 8, 6: 6 },
 	// Q4: inactive bars raised 2→3px so they render solidly and uniformly (a 2px bar lands on half-pixel
 	// boundaries at the user's zoom/DPI and looks unevenly bold). The current bar stays clearly bolder
-	// at 5px (same +2px contrast as before) — plus brighter and a touch longer.
+	// at 5px (same +2px contrast as before) — prominence is thickness + a brighter colour ONLY. W1: the
+	// current bar keeps its exact level length (no length boost), so a deeper heading never masquerades
+	// as a shallower one; W2 centres it in its slot so it never looks dropped toward the bar below.
 	barHeight: 3,
 	currentBarHeight: 5,
-	// A touch longer for the current bar — scaled with the shorter bars so it still reads as "bolder"
-	// without dominating.
-	currentBarLengthBoostPx: 4,
 	// Z1: vertical condensing ~2×. The bar PITCH (barHeight + barGap = 3 + 4 = 7) is roughly HALF the
 	// old 15, so a heading-dense note's stack is about twice as compact — while the bar THICKNESS is
 	// unchanged (3px inactive / 5px current). The old "keep pitch a multiple of 5 so 15 CSS px = 18

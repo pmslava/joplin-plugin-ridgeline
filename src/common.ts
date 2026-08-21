@@ -36,6 +36,10 @@ export const SETTING_MAX_DEPTH = 'maxDepth';
 // Z2: master visibility toggle. When false the strip is fully unmounted (listeners torn down) in both
 // surfaces and every window; when true it is (re)mounted. Live via the same push/poll path.
 export const SETTING_SHOW_MINIMAP = 'showMinimap';
+// W3: hide the strip (and drop the reserve margin) on a note that has NO headings. Default true — the
+// user prefers a clean, unreserved surface on heading-less notes. showMinimap=false always wins;
+// hideWhenEmpty=false keeps the empty strip + margin as before. Live via the same push/poll path.
+export const SETTING_HIDE_WHEN_EMPTY = 'hideWhenEmpty';
 // Q2: hover-intent dwell (ms) before the TOC opens. Stored as a setting so the user can tune it; the
 // coordinator folds the resolved value into the tokens it ships to both content scripts.
 export const SETTING_HOVER_OPEN_DELAY = 'hoverOpenDelayMs';
@@ -53,6 +57,9 @@ export interface RidgelineSettings {
 	maxDepth: number;
 	// Z2: master visibility. false = strip fully unmounted in both surfaces / every window.
 	showMinimap: boolean;
+	// W3: when true (default), a note with 0 headings hides the strip AND drops the reserve margin in
+	// both surfaces / every window. false = the empty strip + margin are kept (pre-W3 behaviour).
+	hideWhenEmpty: boolean;
 }
 
 export const DEFAULT_SETTINGS: RidgelineSettings = {
@@ -61,6 +68,7 @@ export const DEFAULT_SETTINGS: RidgelineSettings = {
 	viewerMode: 'overlay',
 	maxDepth: 6,
 	showMinimap: true,
+	hideWhenEmpty: true,
 };
 
 // The coordinator's answer to a getSettings request: the resolved settings plus the design tokens.
