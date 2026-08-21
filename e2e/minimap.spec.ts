@@ -140,6 +140,35 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     await assertUniformIntegerBars('editor');
   });
 
+  // Z1 — vertical condensing ~2×. The bar PITCH (top-to-top distance) is roughly HALF the v0.2.3 pitch
+  // of 15px, so a note's stack is about twice as compact, WITHOUT changing bar thickness. Measured from
+  // the actual rendered bar tops at default zoom (dpr=1, so device-snapping is a no-op and the pitch is
+  // exactly barHeight+barGap = 7).
+  test('Z1: the bar stack is ~half as tall as v0.2.3 for the same headings', async () => {
+    const { win } = joplin;
+    await scrollEditorTo(win, 0);
+    const tops = await win
+      .locator(`${EDITOR_STRIP} .ridgeline-bar`)
+      .evaluateAll((els) => els.map((el) => (el as HTMLElement).getBoundingClientRect().top).sort((a, b) => a - b));
+    expect(tops.length).toBe(MIXED_HEADINGS.length);
+
+    // Uniform pitch, and it is the halved token pitch (~7px), clearly below the old 15px.
+    const pitches = tops.slice(1).map((t, i) => t - tops[i]);
+    const pitch = pitches.reduce((a, b) => a + b, 0) / pitches.length;
+    const EXPECTED_PITCH = DESIGN_TOKENS.barHeight + DESIGN_TOKENS.barGap; // 3 + 4 = 7
+    expect(pitch).toBeGreaterThan(EXPECTED_PITCH - 1);
+    expect(pitch).toBeLessThan(EXPECTED_PITCH + 1);
+
+    // Stack total (last top − first top + current bar) is roughly half the v0.2.3 equivalent.
+    const OLD_PITCH = 15; // v0.2.3 barHeight(3)+barGap(12)
+    const n = MIXED_HEADINGS.length;
+    const newStack = tops[n - 1] - tops[0] + DESIGN_TOKENS.currentBarHeight;
+    const oldStack = (n - 1) * OLD_PITCH + DESIGN_TOKENS.currentBarHeight;
+    const ratio = newStack / oldStack;
+    expect(ratio, `stack height ratio vs v0.2.3 (${newStack}/${oldStack})`).toBeLessThan(0.65);
+    expect(ratio).toBeGreaterThan(0.4);
+  });
+
   test('Q4: viewer inactive bars are uniform height on integer y positions', async () => {
     await assertUniformIntegerBars('viewer');
   });
