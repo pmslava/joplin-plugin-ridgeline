@@ -151,7 +151,29 @@ jobs:
           })()
           "
 
+      # Idempotency guard. If this exact version is already on npm, skip the publish step below and let
+      # the job finish GREEN. This makes the workflow safe to re-run, and it covers the first-release
+      # bootstrap: npm trusted publishing can only be configured on a package that already exists, so
+      # v0.2.7 is published manually once, trust is configured on the now-existing package, and only then
+      # is the GitHub Release cut — at which point this workflow fires for a version that is ALREADY on
+      # npm. See PUBLISHING.md, "First release (bootstrap) — one time only".
+      - name: Skip publish if this version is already on npm
+        id: version_check
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          # `npm view <pkg>@<version> version` echoes the version when it exists and errors with E404
+          # (or prints nothing) when it does not. Tolerate both so a missing version does not fail here.
+          EXISTING="$(npm view "$NAME@$PUBLISH_VERSION" version 2>/dev/null || true)"
+          if [ "$EXISTING" = "$PUBLISH_VERSION" ]; then
+            echo "$PUBLISH_VERSION already on npm — skipping publish (bootstrap or re-run)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$PUBLISH_VERSION not found on npm — proceeding to publish"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.version_check.outputs.skip != 'true'
         run: |
           # Fail with something readable rather than an authentication error further down.
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then

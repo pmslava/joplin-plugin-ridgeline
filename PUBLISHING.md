@@ -174,12 +174,59 @@ the code being released has been through it. The publish gate only needs to prov
 type-checks and builds. This matches Cockpit, where the real-app E2E is likewise kept off the publish
 path.
 
-## One-time: configure npm trusted publishing
+## npm trusted publishing (and the first-release bootstrap)
 
 Trusted publishing means there is **no `NPM_TOKEN` secret**. npm is told to trust this repository and
-this workflow, and the job exchanges a short-lived GitHub OIDC token for publish rights. This is a
-one-time setup on npmjs.com; it was configured (and each row below independently verified) when the
-package was first created.
+this workflow, and the job exchanges a short-lived GitHub OIDC token for publish rights.
+
+### First release (bootstrap) — one time only
+
+**The very first publish of this package is done by hand.** This is the **one sanctioned exception** to
+the [never-`npm publish`-by-hand rule](#the-publish-is-automatic-never-npm-publish-by-hand), and it
+exists for a concrete npm limitation, not for convenience:
+
+> A trusted publisher can only be configured on a package that **already exists** on npm. npm has **no
+> pending / pre-registration** — there is no way to declare a trusted publisher for a name before that
+> name has been published. (Verified against
+> [docs.npmjs.com/trusted-publishers](https://docs.npmjs.com/trusted-publishers).)
+
+That is a chicken-and-egg at birth: the release workflow can only publish via OIDC once the trusted
+publisher is configured, but the trusted publisher can only be configured once the package exists. The
+bootstrap breaks the loop by publishing the first version manually, configuring trust on the
+now-existing package, then removing the local token so the repository returns to its steady
+**no-tokens-anywhere** state.
+
+Do it **exactly once**, in this order:
+
+1. **Prove the gates**, in the normal order: local fast gate green → local E2E green → push `main` → the
+   GitHub **Tests** workflow green **on that exact pushed SHA** (see
+   [The gates, in order](#the-gates-in-order)). The commit you are about to publish must already be green.
+2. **`npm login`** — interactive; complete 2FA / YubiKey when prompted. This writes a **temporary local
+   token into `~/.npmrc`**. This is the only moment a token exists anywhere, and step 7 removes it.
+3. **`npm run dist`** — build `publish/io.github.pmslava.ridgeline.jpl` from the exact commit you proved
+   green.
+4. **`npm publish`** — the manual publish. This creates the package on npm for the very first time.
+5. **Verify it landed:** `npm view joplin-plugin-ridgeline version` reports the version you just
+   published.
+6. **Configure the trusted publisher** on the **now-existing** package: npmjs.com → the
+   `joplin-plugin-ridgeline` package → **Settings → Trusted publisher** → fill in
+   [the table below](#the-trusted-publisher-configuration). This is only possible now that step 4 made
+   the package exist.
+7. **`npm logout`** — invalidates and removes the temporary token from `~/.npmrc`, restoring the
+   **no-tokens-anywhere** state (no token in the repo, in GitHub secrets, or on any laptop).
+8. **Cut the GitHub Release** the normal way (see [Releasing](#releasing)). Publishing the release fires
+   `publish.yml` for a version that is **already on npm** — its **idempotency guard** detects that
+   (`npm view … version` equals the tag) and **skips the publish step, finishing the job GREEN** with a
+   log line like `0.2.7 already on npm — skipping publish (bootstrap or re-run)`. So this first release
+   does not double-publish, and the workflow still runs green end to end.
+
+From the **second release onward there is no manual step**: the trusted publisher is configured, the
+token is gone, and every release publishes through `publish.yml` via OIDC exactly as
+[The publish is automatic](#the-publish-is-automatic-never-npm-publish-by-hand) describes. The bootstrap
+above is the **only** time `npm publish` is ever run by hand — the never-manual rule holds unchanged for
+every release after the first.
+
+### The trusted-publisher configuration
 
 On **npmjs.com → the `joplin-plugin-ridgeline` package → Settings → Trusted publisher**, the
 configuration is:
