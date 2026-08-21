@@ -45,6 +45,7 @@ export interface SeedSettings {
   maxDepth?: number;
   showMinimap?: boolean;
   hideWhenEmpty?: boolean;
+  showToolbarButton?: boolean;
 }
 
 export function assertE2EReady(): void {
@@ -91,6 +92,7 @@ export function createProfile(loadPlugin = true, seed: SeedSettings = {}): strin
   if (seed.maxDepth != null) settings[`${prefix}maxDepth`] = seed.maxDepth;
   if (seed.showMinimap != null) settings[`${prefix}showMinimap`] = seed.showMinimap;
   if (seed.hideWhenEmpty != null) settings[`${prefix}hideWhenEmpty`] = seed.hideWhenEmpty;
+  if (seed.showToolbarButton != null) settings[`${prefix}showToolbarButton`] = seed.showToolbarButton;
 
   fs.writeFileSync(path.join(profileDir, 'settings.json'), JSON.stringify(settings, null, 2), 'utf8');
   return profileDir;

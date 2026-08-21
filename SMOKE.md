@@ -93,6 +93,11 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       Ridgeline: Toggle minimap** (accelerator **Ctrl+Alt+M**), and the `fa-stream` note-toolbar button.
       Each hides both surfaces in every window live. **Show minimap = off** hides everything regardless
       of the other settings.
+- [ ] **Show the toolbar toggle button (restart required).** Settings → Ridgeline → turn **Show the
+      toolbar toggle button** *off*. Nothing changes yet — this setting is **not live** (the plugin API
+      cannot remove a toolbar button at runtime). **Fully quit and relaunch Joplin**: the `fa-stream`
+      note-toolbar button is now **gone**, while **Tools → Ridgeline: Toggle minimap** and **Ctrl+Alt+M**
+      still toggle the strip. Turn it back **on** and relaunch — the button **returns**.
 - [ ] **Hide when the note has no headings.** Open a note with **no headings at all**: there is **no
       strip** and (in *Reserve margin* mode) **no reserved margin** — the text uses the full width, in
       both the editor and the viewer. **Type a heading** (`# Something`): the strip **appears**

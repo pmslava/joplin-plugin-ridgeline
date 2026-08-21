@@ -36,7 +36,7 @@ To install the file by hand instead, download `io.github.pmslava.ridgeline.jpl` 
 
 ## Settings
 
-All settings live under **Settings → Ridgeline** and apply live.
+All settings live under **Settings → Ridgeline**. Every one applies live, with the single exception of *Show the toolbar toggle button*, which takes effect only after restarting Joplin (see the note in the table).
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -46,6 +46,7 @@ All settings live under **Settings → Ridgeline** and apply live.
 | **Maximum heading depth** | H1–H6 | The deepest heading level shown. Headings deeper than this are dropped from the minimap and the outline. |
 | **Show minimap** | On | Master switch for the strip in both panes. Toggle without disabling the plugin (see the command below). |
 | **Hide minimap when the note has no headings** | On | On a heading-less note, hide the strip and drop its reserved margin so the text uses the full width. |
+| **Show the toolbar toggle button** | On | Show the `fa-stream` note-toolbar button that toggles the minimap. **Takes effect only after restarting Joplin** — unlike every other setting here, this one is not live, because the plugin API cannot remove a toolbar button once created. The Tools menu item and `Ctrl+Alt+M` keep working regardless. |
 | **Hover open delay (ms)** | 300 | How long the pointer must rest on the bars before the outline opens (100–1000 ms). Higher = a quick trip across the strip never opens it. |
 
 ### Commands and shortcuts

@@ -45,6 +45,12 @@ export const SETTING_SHOW_MINIMAP = 'showMinimap';
 // user prefers a clean, unreserved surface on heading-less notes. showMinimap=false always wins;
 // hideWhenEmpty=false keeps the empty strip + margin as before. Live via the same push/poll path.
 export const SETTING_HIDE_WHEN_EMPTY = 'hideWhenEmpty';
+// v0.2.8: gate the fa-stream note-toolbar toggle button behind a setting. Default true (button shown).
+// This is the ONE Ridgeline setting that is NOT live: JoplinViewsToolbarButtons exposes create() only
+// — no remove/hide/destroy — so a toolbar button created at startup cannot be torn down at runtime.
+// The value is therefore read once at startup to decide whether to create the button, and a change to
+// it only takes effect after Joplin is restarted. The Tools-menu item and Ctrl+Alt+M are unaffected.
+export const SETTING_SHOW_TOOLBAR_BUTTON = 'showToolbarButton';
 // Q2: hover-intent dwell (ms) before the TOC opens. Stored as a setting so the user can tune it; the
 // coordinator folds the resolved value into the tokens it ships to both content scripts.
 export const SETTING_HOVER_OPEN_DELAY = 'hoverOpenDelayMs';

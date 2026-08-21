@@ -18,6 +18,7 @@ import {
 	SETTING_HOVER_OPEN_DELAY,
 	SETTING_MAX_DEPTH,
 	SETTING_SHOW_MINIMAP,
+	SETTING_SHOW_TOOLBAR_BUTTON,
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
 	TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
@@ -109,6 +110,23 @@ async function registerSettings(): Promise<void> {
 				'On a note with no headings, hide the strip and drop its reserved margin entirely (in both ' +
 				'the editor and viewer) so the text uses the full width. Turn off to keep the empty strip. ' +
 				'Applies live.',
+			storage: SettingStorage.File,
+		},
+		[SETTING_SHOW_TOOLBAR_BUTTON]: {
+			value: true,
+			type: SettingItemType.Bool,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Show the toolbar toggle button',
+			// This is the ONE Ridgeline setting that is NOT live: it takes effect only after Joplin is
+			// restarted, because the plugin API cannot remove a toolbar button at runtime (see the
+			// conditional create in onStart). Say so plainly here so the user is not left waiting for a
+			// change that will not appear until a relaunch.
+			description:
+				'Show the note-toolbar button (the fa-stream icon) that toggles the minimap. Takes effect ' +
+				'only after restarting Joplin — unlike every other Ridgeline setting, this one is not live, ' +
+				'because the plugin API cannot remove a toolbar button once it has been created. The Tools ' +
+				'menu item and Ctrl+Alt+M keep working regardless.',
 			storage: SettingStorage.File,
 		},
 		[SETTING_HOVER_OPEN_DELAY]: {
@@ -299,11 +317,21 @@ joplin.plugins.register({
 		// The same command as a note-toolbar button so the toggle is a single click away, not buried in
 		// the Tools menu. Note toolbar = desktop-only, present whenever a note is open. The button's
 		// hover title is the command label ("Ridgeline: Toggle minimap"); the E2E locates it by that.
-		await joplin.views.toolbarButtons.create(
-			'ridgeline.toggleMinimap.toolbar',
-			TOGGLE_MINIMAP_COMMAND,
-			ToolbarButtonLocation.NoteToolbar,
-		);
+		//
+		// Gated behind SETTING_SHOW_TOOLBAR_BUTTON, read once here at startup. This is the ONE Ridgeline
+		// setting that is NOT live: JoplinViewsToolbarButtons exposes create() only (no remove/hide/
+		// destroy — confirmed in api/JoplinViewsToolbarButtons.d.ts), so a button created here cannot be
+		// torn down at runtime. A change to the setting therefore only takes effect on the next Joplin
+		// restart. The Tools-menu item and Ctrl+Alt+M above are registered unconditionally and are
+		// unaffected either way.
+		const showToolbarButton = (await joplin.settings.value(SETTING_SHOW_TOOLBAR_BUTTON)) !== false;
+		if (showToolbarButton) {
+			await joplin.views.toolbarButtons.create(
+				'ridgeline.toggleMinimap.toolbar',
+				TOGGLE_MINIMAP_COMMAND,
+				ToolbarButtonLocation.NoteToolbar,
+			);
+		}
 
 		// W3: toggle the "hide when the note has no headings" setting live. Flipping it fires
 		// joplin.settings.onChange above → the strip + reserve margin mount/unmount to match on a
