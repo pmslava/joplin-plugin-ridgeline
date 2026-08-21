@@ -27,6 +27,11 @@ async function fireToggle(win: Page): Promise<void> {
   await win.keyboard.press('Control+Alt+m');
 }
 
+// The note-toolbar button created for the toggle command. Its `title` attribute is the command label
+// ("Ridgeline: Toggle minimap"); Joplin may append the keymap accelerator (e.g. " (Ctrl+Alt+M)"), so
+// match by prefix rather than an exact string.
+const TOOLBAR_BUTTON = 'button[title^="Ridgeline: Toggle minimap"]';
+
 test.describe('Ridgeline visibility toggle (Show minimap)', () => {
   let joplin: JoplinInstance;
 
@@ -61,6 +66,39 @@ test.describe('Ridgeline visibility toggle (Show minimap)', () => {
 
     // Toggle ON again — both come back, still no relaunch.
     await fireToggle(win);
+    await expect(editorStrip).toHaveCount(1, { timeout: 15_000 });
+    await expect(viewerStrip).toHaveCount(1, { timeout: 15_000 });
+  });
+
+  // The note-toolbar button (fa-stream icon) flips the SAME "Show minimap" setting as the Tools
+  // command / Ctrl+Alt+M, so clicking it must hide the strip in both surfaces and clicking again
+  // restore it — live, no relaunch. Its hover title is the command label; Joplin may append the
+  // keymap accelerator, so we match the title by prefix. The click is dispatched (not a real mouse
+  // click) to match how the panel-row click and Cockpit's own toolbar-button test are fired: a
+  // synthetic click still runs the React handler → the registered command → the setting flip, and it
+  // sidesteps hit-testing flakiness under the virtual display.
+  test('the note-toolbar button (fa-stream) toggles the strip live in both surfaces', async () => {
+    const { win } = joplin;
+    const button = win.locator(TOOLBAR_BUTTON);
+    // Registered against the note toolbar; present because a note is open.
+    await expect(button).toBeVisible({ timeout: 20_000 });
+    // It renders the chosen fa-stream icon (not some fallback), proving the iconName took effect.
+    await expect(button.locator('i.fa-stream')).toHaveCount(1);
+
+    const editorStrip = win.locator(EDITOR_STRIP);
+    const viewerStrip = win.frameLocator(VIEWER_IFRAME).locator('#ridgeline-viewer-strip');
+
+    // Baseline: both surfaces show the strip.
+    await expect(editorStrip).toHaveCount(1, { timeout: 15_000 });
+    await expect(viewerStrip).toHaveCount(1, { timeout: 15_000 });
+
+    // Click the toolbar button — the strip unmounts in editor AND viewer, no relaunch.
+    await button.dispatchEvent('click');
+    await expect(editorStrip).toHaveCount(0, { timeout: 15_000 });
+    await expect(viewerStrip).toHaveCount(0, { timeout: 15_000 });
+
+    // Click again — both come back.
+    await button.dispatchEvent('click');
     await expect(editorStrip).toHaveCount(1, { timeout: 15_000 });
     await expect(viewerStrip).toHaveCount(1, { timeout: 15_000 });
   });
