@@ -1,5 +1,11 @@
 import joplin from 'api';
-import { ContentScriptType, MenuItemLocation, SettingItemType, SettingStorage } from 'api/types';
+import {
+	ContentScriptType,
+	MenuItemLocation,
+	SettingItemType,
+	SettingStorage,
+	ToolbarButtonLocation,
+} from 'api/types';
 import {
 	EDITOR_APPLY_SETTINGS_COMMAND,
 	EDITOR_CONTENT_SCRIPT_ID,
@@ -256,10 +262,12 @@ joplin.plugins.register({
 
 		// Z2: master visibility toggle. Flips the boolean setting, which fires joplin.settings.onChange
 		// above → both surfaces mount/unmount the strip live (editor pushed, viewer polled), in every
-		// window. Tools menu + Ctrl+Alt+M. No toolbar/panel button (the user does not want one this round).
+		// window. Reachable three ways, all flipping the same setting: Tools menu, Ctrl+Alt+M, and a
+		// note-toolbar button (fa-stream, a stack of staggered lines that reads as the minimap).
 		await joplin.commands.register({
 			name: TOGGLE_MINIMAP_COMMAND,
 			label: 'Ridgeline: Toggle minimap',
+			iconName: 'fas fa-stream',
 			execute: async () => {
 				const current = await joplin.settings.value(SETTING_SHOW_MINIMAP);
 				await joplin.settings.setValue(SETTING_SHOW_MINIMAP, current === false);
@@ -270,6 +278,14 @@ joplin.plugins.register({
 			TOGGLE_MINIMAP_COMMAND,
 			MenuItemLocation.Tools,
 			{ accelerator: 'Ctrl+Alt+M' },
+		);
+		// The same command as a note-toolbar button so the toggle is a single click away, not buried in
+		// the Tools menu. Note toolbar = desktop-only, present whenever a note is open. The button's
+		// hover title is the command label ("Ridgeline: Toggle minimap"); the E2E locates it by that.
+		await joplin.views.toolbarButtons.create(
+			'ridgeline.toggleMinimap.toolbar',
+			TOGGLE_MINIMAP_COMMAND,
+			ToolbarButtonLocation.NoteToolbar,
 		);
 
 		console.info(`[ridgeline] ${PLUGIN_ID} started`);

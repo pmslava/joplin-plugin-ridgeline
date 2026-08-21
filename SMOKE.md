@@ -67,7 +67,8 @@ headings and at least one **very long** heading.
 - [ ] **Z2 — Show/hide the minimap (no relaunch).** Settings → Ridgeline → **Show minimap** → **off**:
       the strip **vanishes** in the editor **and** the viewer, immediately, in **every** window — the
       plugin stays enabled. Turn it back **on**: it returns. The same flip is on **Tools → Ridgeline:
-      Toggle minimap** (accelerator **Ctrl+Alt+M**). (No toolbar/panel button by design this round.)
+      Toggle minimap** (accelerator **Ctrl+Alt+M**). The **note-toolbar button** (staggered-lines
+      `fa-stream` icon, in the note's top-right toolbar) also toggles the minimap.
 - [ ] **Z3 — Transit into the Cockpit panel: no popup, no stuck-open.** ① **Swipe from the note text
       leftward across the strip into your Cockpit panel** (even at speed) — the TOC must **NOT** pop
       open. ② Now **open the TOC** (rest on the bars) and then **move the pointer into the Cockpit
