@@ -20,6 +20,7 @@ import {
 	SETTING_SHOW_MINIMAP,
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
+	TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
 	TOGGLE_MINIMAP_COMMAND,
 	TOGGLE_SIDE_COMMAND,
 	VIEWER_CONTENT_SCRIPT_ID,
@@ -302,6 +303,24 @@ joplin.plugins.register({
 			'ridgeline.toggleMinimap.toolbar',
 			TOGGLE_MINIMAP_COMMAND,
 			ToolbarButtonLocation.NoteToolbar,
+		);
+
+		// W3: toggle the "hide when the note has no headings" setting live. Flipping it fires
+		// joplin.settings.onChange above → the strip + reserve margin mount/unmount to match on a
+		// heading-less note (editor pushed, viewer polled), in every window, with no relaunch.
+		await joplin.commands.register({
+			name: TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
+			label: 'Ridgeline: Toggle hide-when-empty',
+			execute: async () => {
+				const current = await joplin.settings.value(SETTING_HIDE_WHEN_EMPTY);
+				await joplin.settings.setValue(SETTING_HIDE_WHEN_EMPTY, current === false);
+			},
+		});
+		await joplin.views.menuItems.create(
+			'ridgeline.toggleHideWhenEmpty.menu',
+			TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
+			MenuItemLocation.Tools,
+			{ accelerator: 'Ctrl+Alt+H' },
 		);
 
 		console.info(`[ridgeline] ${PLUGIN_ID} started`);

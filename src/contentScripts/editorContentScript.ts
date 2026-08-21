@@ -415,7 +415,7 @@ class EditorStrip {
 	// size the hit-zone box to bound them. top_i = round(i * pitch * dpr) / dpr snaps each bar's top to
 	// an exact integer DEVICE pixel (phase 0) at ANY zoom, so every inactive bar antialiases identically
 	// (uniform boldness — the old Q4 fix, now zoom-proof) even at the halved pitch. The current bar
-	// (taller) grows downward without reflowing its neighbours.
+	// (taller) is CENTRED in its slot by layoutBars (W2), without reflowing its neighbours.
 	private deviceSnap(px: number): number {
 		const dpr = this.ownerWin.devicePixelRatio || 1;
 		return Math.round(px * dpr) / dpr;

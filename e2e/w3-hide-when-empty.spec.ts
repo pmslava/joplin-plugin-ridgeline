@@ -159,3 +159,63 @@ test.describe('W3 hideWhenEmpty=false — the empty strip + margin are kept', ()
     await expect.poll(() => viewerBodyMargin(frame), { timeout: 15_000 }).toBeGreaterThanOrEqual(14);
   });
 });
+
+/**
+ * W3 (live toggle) — flipping the hideWhenEmpty SETTING at runtime, on a note that has 0 headings, must
+ * mount/unmount the strip + reserve margin on BOTH surfaces with no relaunch. This is the explicit
+ * round-5 acceptance item "setting toggles live via the settings poll": the editor picks the change up
+ * via the onChange push, the viewer via its ~700ms poll. A heading-less note is used so the setting flip
+ * ITSELF is what crosses the visibility boundary (the heading count never changes), isolating the live
+ * setting-change path from the typing-a-heading path already covered above.
+ *
+ * The flip is driven by the registered "Ridgeline: Toggle hide-when-empty" command (Tools menu,
+ * accelerator Ctrl+Alt+H), which calls joplin.settings.setValue — exactly the user-facing live path.
+ */
+
+// Fire the hide-when-empty toggle via its accelerator (focus the editor first so the accelerator lands).
+async function fireHideWhenEmptyToggle(win: Page): Promise<void> {
+  await win.locator('.cm-content').first().click();
+  await win.waitForTimeout(300);
+  await win.keyboard.press('Control+Alt+h');
+}
+
+test.describe('W3 hideWhenEmpty toggles LIVE via the settings path (reserve mode, both surfaces)', () => {
+  let joplin: JoplinInstance;
+  let frame: Frame;
+
+  test.beforeAll(async () => {
+    // Default profile → hideWhenEmpty defaults TRUE, so the heading-less note starts hidden.
+    joplin = await launchJoplin({ seed: { editorMode: 'reserve', viewerMode: 'reserve' } });
+    await createNotebook(joplin.win, 'Ridgeline NB');
+    await createNoteWithBody(joplin.win, 'W3 Live-Toggle Note', EMPTY_BODY);
+    frame = await ensureViewerVisible(joplin.win);
+  });
+
+  test.afterAll(async () => {
+    if (joplin) await closeJoplin(joplin);
+  });
+
+  test('flipping hideWhenEmpty off mounts the empty strip + margin live; flipping on unmounts it', async () => {
+    const { win } = joplin;
+
+    // Baseline: hideWhenEmpty=true + 0 headings → nothing mounted, no reserve on either surface.
+    await expect(win.locator(EDITOR_STRIP)).toHaveCount(0, { timeout: 15_000 });
+    await expect(frame.locator('#ridgeline-viewer-strip')).toHaveCount(0, { timeout: 15_000 });
+
+    // Flip hideWhenEmpty → FALSE. The setting change fires onChange (editor pushed) and the viewer poll
+    // picks it up: the empty strip (zero bars) + its reserved margin appear on BOTH surfaces, no relaunch.
+    await fireHideWhenEmptyToggle(win);
+    await expect(win.locator(EDITOR_STRIP)).toHaveCount(1, { timeout: 15_000 });
+    expect(await win.locator(`${EDITOR_STRIP} .ridgeline-bar`).count()).toBe(0);
+    await expect.poll(() => editorReservePadding(win), { timeout: 15_000 }).toBeGreaterThanOrEqual(14);
+    await expect(frame.locator('#ridgeline-viewer-strip')).toHaveCount(1, { timeout: 15_000 });
+    await expect.poll(() => viewerBodyMargin(frame), { timeout: 15_000 }).toBeGreaterThanOrEqual(14);
+
+    // Flip hideWhenEmpty → TRUE again. The empty strip + margin unmount live on both surfaces.
+    await fireHideWhenEmptyToggle(win);
+    await expect(win.locator(EDITOR_STRIP)).toHaveCount(0, { timeout: 15_000 });
+    await expect.poll(() => editorReservePadding(win), { timeout: 15_000 }).toBeLessThan(14);
+    await expect(frame.locator('#ridgeline-viewer-strip')).toHaveCount(0, { timeout: 15_000 });
+    await expect.poll(() => viewerBodyMargin(frame), { timeout: 15_000 }).toBeLessThan(14);
+  });
+});

@@ -8,6 +8,14 @@ import {
   createNoteWithBody,
   ensureViewerVisible,
   scrollEditorTo,
+  scrollViewerTo,
+  editorCurrentHeading,
+  viewerCurrentHeading,
+  readEditorBars,
+  readViewerBars,
+  assertToggledBarCentered,
+  assertNeighboursUnmoved,
+  MIXED_HEADINGS,
   waitForEditorStrip,
   EDITOR_STRIP,
   VIEWER_IFRAME,
@@ -114,5 +122,64 @@ test.describe('Z1 device-pixel phase alignment at 120% zoom', () => {
     // eslint-disable-next-line no-console
     console.log(`[z1zoom] viewer devicePixelRatio=${dpr}`);
     assertPhaseAligned(bars, dpr, 'viewer@120');
+  });
+
+  // W2 at 120% zoom — the current bar is CENTRED in its pitch slot at the user's real fractional dpr, not
+  // just at dpr=1. Phase alignment (above) holds for a centred AND a downward-grown current bar, so it
+  // cannot see miscentring; this test can. It toggles which bar is current (scroll top vs bottom) and
+  // asserts the toggled bar keeps its vertical CENTRE put across the change — the invariant that holds
+  // iff the current bar is centred in its slot (a downward-grown bar would drop its centre ~1 device px).
+  // Neighbours (inactive in both snapshots) must not move. This is the W2 centring proof at 120%.
+  test('editor: W2 current bar stays centred in its slot at 120% zoom', async () => {
+    const win = joplin.win as Page;
+
+    // Snapshot A: scrolled to top → first heading current.
+    await scrollEditorTo(win, 0);
+    await expect.poll(() => editorCurrentHeading(win), { timeout: 5_000 }).toBe(MIXED_HEADINGS[0].text);
+    const a = await readEditorBars(win);
+    expect(a.dpr, 'the 120% zoom must have raised dpr for this to be a real 120% assertion').toBeGreaterThan(1.05);
+    expect(a.bars[0].current, 'first bar current at top-of-scroll').toBe(true);
+
+    // Snapshot B: scrolled to the bottom → the LAST heading current (a different bar).
+    await win.evaluate(() => {
+      const el = document.querySelector('.cm-scroller') as HTMLElement | null;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    await expect
+      .poll(() => editorCurrentHeading(win), { timeout: 5_000 })
+      .toBe(MIXED_HEADINGS[MIXED_HEADINGS.length - 1].text);
+    const b = await readEditorBars(win);
+    expect(b.bars[b.bars.length - 1].current, 'last bar current at bottom-of-scroll').toBe(true);
+
+    assertToggledBarCentered(a.bars, b.bars, a.dpr, 'editor@120', 1);
+    assertNeighboursUnmoved(a.bars, b.bars, a.dpr, 'editor@120');
+    await scrollEditorTo(win, 0);
+  });
+
+  test('viewer: W2 current bar stays centred in its slot at 120% zoom', async () => {
+    const win = joplin.win as Page;
+    const frame: Frame = await ensureViewerVisible(win);
+    await expect(win.frameLocator(VIEWER_IFRAME).locator('#ridgeline-viewer-strip .ridgeline-bar').first()).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Snapshot A: viewer scrolled to top → first heading current.
+    await scrollViewerTo(win, 0);
+    await expect.poll(() => viewerCurrentHeading(win), { timeout: 10_000 }).toBe(MIXED_HEADINGS[0].text);
+    const a = await readViewerBars(frame);
+    expect(a.dpr, 'viewer 120% zoom must have raised dpr').toBeGreaterThan(1.05);
+    expect(a.bars[0].current, 'first viewer bar current at top-of-scroll').toBe(true);
+
+    // Snapshot B: viewer scrolled to the bottom → the LAST heading current.
+    await scrollViewerTo(win, 10_000_000);
+    await expect
+      .poll(() => viewerCurrentHeading(win), { timeout: 10_000 })
+      .toBe(MIXED_HEADINGS[MIXED_HEADINGS.length - 1].text);
+    const b = await readViewerBars(frame);
+    expect(b.bars[b.bars.length - 1].current, 'last viewer bar current at bottom-of-scroll').toBe(true);
+
+    assertToggledBarCentered(a.bars, b.bars, a.dpr, 'viewer@120', 1);
+    assertNeighboursUnmoved(a.bars, b.bars, a.dpr, 'viewer@120');
+    await scrollViewerTo(win, 0);
   });
 });

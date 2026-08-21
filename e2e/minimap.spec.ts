@@ -17,51 +17,17 @@ import {
   waitForEditorStrip,
   EDITOR_STRIP,
   VIEWER_IFRAME,
+  readEditorBars,
+  readViewerBars,
+  assertCurrentBarCentered,
+  assertNeighboursUnmoved,
+  assertToggledBarCentered,
 } from './helpers';
 import { DESIGN_TOKENS } from '../src/tokens';
 
-// W2 — bar geometry sample and the "current bar is centred in its slot" assertion, shared by the
-// editor and viewer W2 tests.
-interface BarGeo {
-  current: boolean;
-  top: number;
-  height: number;
-}
-
-// The current bar's vertical CENTRE must equal the centre an inactive bar would have in the same slot
-// (within 1 device px). Inactive bars sit on a straight line centre_i = a + b*i (slot centres on the
-// pitch); fit that line from the first and last inactive bars and predict the centre at the current
-// bar's index — the current bar must land on it, proving it is centred, not dropped toward a neighbour.
-function assertCurrentBarCentered(bars: BarGeo[], dpr: number, where: string): void {
-  expect(bars.length, `${where}: bar count`).toBeGreaterThan(2);
-  expect(bars.filter((b) => b.current).length, `${where}: exactly one current bar`).toBe(1);
-  const currentIdx = bars.findIndex((b) => b.current);
-  const centres = bars.map((b) => b.top + b.height / 2);
-  const inactiveIdx = bars.map((_, i) => i).filter((i) => !bars[i].current);
-  const i0 = inactiveIdx[0];
-  const i1 = inactiveIdx[inactiveIdx.length - 1];
-  const slope = (centres[i1] - centres[i0]) / (i1 - i0);
-  const predicted = centres[i0] + slope * (currentIdx - i0);
-  const deltaDevicePx = Math.abs(centres[currentIdx] - predicted) * dpr;
-  expect(
-    deltaDevicePx,
-    `${where}: current-bar centre (${centres[currentIdx].toFixed(2)}) matches its slot centre (${predicted.toFixed(2)}) within 1 device px`
-  ).toBeLessThanOrEqual(1);
-}
-
-// Every bar inactive in BOTH snapshots must keep the same top (within 1 device px): the bar that
-// gained/lost "current" may shift (it centres/uncentres), but its neighbours must not move.
-function assertNeighboursUnmoved(a: BarGeo[], b: BarGeo[], dpr: number, where: string): void {
-  expect(a.length, `${where}: same bar count`).toBe(b.length);
-  for (let i = 0; i < a.length; i++) {
-    if (!a[i].current && !b[i].current) {
-      expect(
-        Math.abs(a[i].top - b[i].top) * dpr,
-        `${where}: inactive bar ${i} unmoved (device px)`
-      ).toBeLessThanOrEqual(1);
-    }
-  }
-}
+// W2 centring assertions (assertCurrentBarCentered / assertNeighboursUnmoved / assertToggledBarCentered)
+// and the bar-geometry sampler now live in helpers.ts, shared with the 120%-zoom Z1 spec so W2 centring
+// is proven at BOTH the default and the user's real 120% zoom.
 
 /**
  * Phase-2 minimap behaviour on a note whose headings span H1..H6. One default launch covers the
@@ -221,30 +187,20 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     await assertUniformIntegerBars('viewer');
   });
 
-  // Sample the editor bar geometry (index order, with the current flag) at the current scroll.
-  async function readEditorBars(): Promise<{ dpr: number; bars: BarGeo[] }> {
-    return joplin.win.evaluate((sel) => {
-      const els = Array.from(document.querySelectorAll(`${sel} .ridgeline-bar`)) as HTMLElement[];
-      return {
-        dpr: window.devicePixelRatio,
-        bars: els.map((el) => {
-          const r = el.getBoundingClientRect();
-          return { current: el.classList.contains('is-current'), top: r.top, height: r.height };
-        }),
-      };
-    }, EDITOR_STRIP);
-  }
-
   // W2 (editor) — the current bar is CENTRED in its pitch slot: its vertical centre equals the centre an
   // inactive bar would have in the same slot, and its neighbours do not move when a DIFFERENT bar becomes
-  // current. Proven by toggling which bar is current (scroll top vs bottom) and comparing geometry.
+  // current. Proven by toggling which bar is current (scroll top vs bottom) and comparing geometry. At
+  // this default zoom dpr=1, so a correctly-centred bar's centre is INVARIANT across the toggle (delta
+  // exactly 0) while the pre-W2 downward-grown bar would shift its centre by 1 device px — so the
+  // assertToggledBarCentered guard is set BELOW 1 device px (0.5) here to discriminate the two, whereas
+  // the straddling assertCurrentBarCentered line fit cannot (its ≤1-px tolerance equals the miscentring).
   test('W2: editor current bar is centred in its slot; neighbours unmoved when it changes', async () => {
     const { win } = joplin;
 
     // Snapshot A: scrolled to top → first heading is current.
     await scrollEditorTo(win, 0);
     await expect.poll(() => editorCurrentHeading(win), { timeout: 5_000 }).toBe(MIXED_HEADINGS[0].text);
-    const a = await readEditorBars();
+    const a = await readEditorBars(win);
     expect(a.bars[0].current, 'first bar current at top-of-scroll').toBe(true);
     assertCurrentBarCentered(a.bars, a.dpr, 'editor@top');
 
@@ -256,12 +212,14 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     await expect
       .poll(() => editorCurrentHeading(win), { timeout: 5_000 })
       .toBe(MIXED_HEADINGS[MIXED_HEADINGS.length - 1].text);
-    const b = await readEditorBars();
+    const b = await readEditorBars(win);
     expect(b.bars[b.bars.length - 1].current, 'last bar current at bottom-of-scroll').toBe(true);
     assertCurrentBarCentered(b.bars, b.dpr, 'editor@bottom');
 
-    // Neighbours (bars inactive in both snapshots) did not move as the current bar moved from first to
-    // last — only the two bars that changed current-state may shift.
+    // The DISCRIMINATING check: the bars that toggled current between the two snapshots kept their
+    // centre put (< 0.5 device px at dpr=1) — a downward-grown, un-centred bar would drop it ~1 device
+    // px. Plus neighbours (inactive in both) did not move.
+    assertToggledBarCentered(a.bars, b.bars, a.dpr, 'editor', 0.5);
     assertNeighboursUnmoved(a.bars, b.bars, a.dpr, 'editor');
 
     await scrollEditorTo(win, 0);
@@ -275,24 +233,10 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
       timeout: 15_000,
     });
 
-    const readViewerBars = async (): Promise<{ dpr: number; bars: BarGeo[] }> =>
-      frame.evaluate(() => {
-        const els = Array.from(
-          document.querySelectorAll('#ridgeline-viewer-strip .ridgeline-bar')
-        ) as HTMLElement[];
-        return {
-          dpr: window.devicePixelRatio,
-          bars: els.map((el) => {
-            const r = el.getBoundingClientRect();
-            return { current: el.classList.contains('is-current'), top: r.top, height: r.height };
-          }),
-        };
-      });
-
     // Snapshot A: viewer scrolled to top → first heading current.
     await scrollViewerTo(win, 0);
     await expect.poll(() => viewerCurrentHeading(win), { timeout: 10_000 }).toBe(MIXED_HEADINGS[0].text);
-    const a = await readViewerBars();
+    const a = await readViewerBars(frame);
     expect(a.bars[0].current, 'first viewer bar current at top-of-scroll').toBe(true);
     assertCurrentBarCentered(a.bars, a.dpr, 'viewer@top');
 
@@ -301,10 +245,11 @@ test.describe('Ridgeline compact minimap + hover TOC', () => {
     await expect
       .poll(() => viewerCurrentHeading(win), { timeout: 10_000 })
       .toBe(MIXED_HEADINGS[MIXED_HEADINGS.length - 1].text);
-    const b = await readViewerBars();
+    const b = await readViewerBars(frame);
     expect(b.bars[b.bars.length - 1].current, 'last viewer bar current at bottom-of-scroll').toBe(true);
     assertCurrentBarCentered(b.bars, b.dpr, 'viewer@bottom');
 
+    assertToggledBarCentered(a.bars, b.bars, a.dpr, 'viewer', 0.5);
     assertNeighboursUnmoved(a.bars, b.bars, a.dpr, 'viewer');
 
     await scrollViewerTo(win, 0);

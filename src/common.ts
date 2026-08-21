@@ -27,6 +27,11 @@ export const TOGGLE_SIDE_COMMAND = 'ridgeline.toggleSide';
 // disabling the plugin.
 export const TOGGLE_MINIMAP_COMMAND = 'ridgeline.toggleMinimap';
 
+// W3: plugin command (Tools menu + accelerator Ctrl+Alt+H) that flips the "hideWhenEmpty" setting, so
+// the user can turn the hide-on-heading-less-note behaviour on/off live in every window. Flipping it
+// fires the same settings.onChange path (editor pushed, viewer polled) that mounts/unmounts the strip.
+export const TOGGLE_HIDE_WHEN_EMPTY_COMMAND = 'ridgeline.toggleHideWhenEmpty';
+
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
 // in a profile's settings.json and survive restarts.
 export const SETTING_SIDE = 'side';

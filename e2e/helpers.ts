@@ -347,6 +347,122 @@ export async function measureHeadingGeometry(win: Page): Promise<HeadingGeometry
   });
 }
 
+// ── W2 shared bar-geometry sampling + centring assertions ───────────────────────────────────────
+// A single bar's geometry in a strip snapshot: whether it is the current bar plus its viewport rect.
+export interface BarGeo {
+  current: boolean;
+  top: number;
+  height: number;
+}
+
+// Sample the editor strip bars (document order, with the current flag + geometry) at the current
+// scroll, measured at the surface window's devicePixelRatio.
+export async function readEditorBars(win: Page): Promise<{ dpr: number; bars: BarGeo[] }> {
+  return win.evaluate((sel) => {
+    const els = Array.from(document.querySelectorAll(`${sel} .ridgeline-bar`)) as HTMLElement[];
+    return {
+      dpr: window.devicePixelRatio,
+      bars: els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { current: el.classList.contains('is-current'), top: r.top, height: r.height };
+      }),
+    };
+  }, EDITOR_STRIP);
+}
+
+// Same sample for the rendered viewer strip inside the note iframe.
+export async function readViewerBars(frame: Frame): Promise<{ dpr: number; bars: BarGeo[] }> {
+  return frame.evaluate(() => {
+    const els = Array.from(
+      document.querySelectorAll('#ridgeline-viewer-strip .ridgeline-bar')
+    ) as HTMLElement[];
+    return {
+      dpr: window.devicePixelRatio,
+      bars: els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { current: el.classList.contains('is-current'), top: r.top, height: r.height };
+      }),
+    };
+  });
+}
+
+// The current bar's vertical CENTRE must equal the centre an inactive bar would have in the same slot
+// (within `toleranceDevicePx` device px). Inactive bars sit on a straight line centre_i = a + b*i (slot
+// centres on the pitch); fit that line from the first and last inactive bars and predict the centre at
+// the current bar's index — the current bar must land on it, proving it is centred, not dropped toward a
+// neighbour. NOTE: a line fit STRADDLES the current slot, so at a fractional devicePixelRatio (120% zoom)
+// the endpoint device-snap rounding can leave this test unable to distinguish a centred bar from a
+// half-slot-dropped one at the FIRST/LAST index (the predicted centre sits between the two). Use it as a
+// sanity check; assertToggledBarCentered below is the zoom-robust discriminator.
+export function assertCurrentBarCentered(
+  bars: BarGeo[],
+  dpr: number,
+  where: string,
+  toleranceDevicePx = 1
+): void {
+  expect(bars.length, `${where}: bar count`).toBeGreaterThan(2);
+  expect(bars.filter((b) => b.current).length, `${where}: exactly one current bar`).toBe(1);
+  const currentIdx = bars.findIndex((b) => b.current);
+  const centres = bars.map((b) => b.top + b.height / 2);
+  const inactiveIdx = bars.map((_, i) => i).filter((i) => !bars[i].current);
+  const i0 = inactiveIdx[0];
+  const i1 = inactiveIdx[inactiveIdx.length - 1];
+  const slope = (centres[i1] - centres[i0]) / (i1 - i0);
+  const predicted = centres[i0] + slope * (currentIdx - i0);
+  const deltaDevicePx = Math.abs(centres[currentIdx] - predicted) * dpr;
+  expect(
+    deltaDevicePx,
+    `${where}: current-bar centre (${centres[currentIdx].toFixed(2)}) matches its slot centre (${predicted.toFixed(2)}) within ${toleranceDevicePx} device px`
+  ).toBeLessThanOrEqual(toleranceDevicePx);
+}
+
+// Every bar inactive in BOTH snapshots must keep the same top (within 1 device px): the bar that
+// gained/lost "current" may shift (it centres/uncentres), but its neighbours must not move.
+export function assertNeighboursUnmoved(a: BarGeo[], b: BarGeo[], dpr: number, where: string): void {
+  expect(a.length, `${where}: same bar count`).toBe(b.length);
+  for (let i = 0; i < a.length; i++) {
+    if (!a[i].current && !b[i].current) {
+      expect(
+        Math.abs(a[i].top - b[i].top) * dpr,
+        `${where}: inactive bar ${i} unmoved (device px)`
+      ).toBeLessThanOrEqual(1);
+    }
+  }
+}
+
+// The ZOOM-ROBUST W2 centring proof at ANY devicePixelRatio. Take two scroll snapshots of the SAME
+// heading stack where a DIFFERENT bar is current (e.g. scrolled to top vs bottom). A bar that is centred
+// in its pitch slot occupies the SAME vertical centre whether it is the thin inactive bar (top =
+// slotTop, height = barHeight) or the thick current bar (top = slotTop − centerPad, height =
+// currentBarHeight) — the centre is slotTop + barHeight/2 either way. So as a bar toggles current between
+// the two snapshots, its measured centre must NOT move (within tolerance). A downward-grown, UN-centred
+// current bar (the pre-W2 bug: top = slotTop, height = currentBarHeight) would instead drop its centre by
+// (currentBarHeight − barHeight)/2 ≈ 1 CSS px — caught cleanly here (unlike the straddling line fit).
+// Requires the stack composition (and hence every slot) to be identical across the two snapshots — only
+// which bar is current differs.
+export function assertToggledBarCentered(
+  a: BarGeo[],
+  b: BarGeo[],
+  dpr: number,
+  where: string,
+  toleranceDevicePx = 1
+): void {
+  expect(a.length, `${where}: same bar count`).toBe(b.length);
+  let checked = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].current !== b[i].current) {
+      const ca = a[i].top + a[i].height / 2;
+      const cb = b[i].top + b[i].height / 2;
+      expect(
+        Math.abs(ca - cb) * dpr,
+        `${where}: bar ${i} centre stays put across the current toggle (device px)`
+      ).toBeLessThanOrEqual(toleranceDevicePx);
+      checked++;
+    }
+  }
+  expect(checked, `${where}: at least one bar toggled current between the two snapshots`).toBeGreaterThan(0);
+}
+
 /** Select the note with the given title in the note list (used to exercise note switching). */
 export async function selectNoteByTitle(win: Page, title: string): Promise<void> {
   await win.locator('.note-list-item .title span', { hasText: title }).first().click();

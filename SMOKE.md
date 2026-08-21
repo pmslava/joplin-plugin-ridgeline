@@ -71,8 +71,10 @@ one) and enough text to scroll.
       in both the editor and the viewer. **Type a heading** (`# Something`): the strip **appears**
       immediately (and the margin returns in reserve mode), **no relaunch**. **Delete that last
       heading**: it **disappears** again. Settings → Ridgeline → **Hide minimap when the note has no
-      headings** (default **on**) controls this; turn it **off** to keep the empty strip + margin as
-      before. **Show minimap = off** still hides everything regardless.
+      headings** (default **on**) controls this; turn it **off** (or run **Tools → Ridgeline: Toggle
+      hide-when-empty**, accelerator **Ctrl+Alt+H**) to keep the empty strip + margin as before — with a
+      heading-less note open, toggling it flips the empty strip + margin on/off **live**, no relaunch.
+      **Show minimap = off** still hides everything regardless.
 
 Round-1/2/3/4 behaviours remain in force — spot-check them: top-anchored right-aligned bars, panel
 overlay with single-line ellipsized rows, hover-intent dwell + grace + Esc, pointer cursor on rows,
