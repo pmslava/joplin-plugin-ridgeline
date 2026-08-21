@@ -1,4 +1,4 @@
-# Ridgeline — manual checklist (Phase 2, v0.2.3)
+# Ridgeline — manual checklist (Phase 2, v0.2.4)
 
 Ridgeline draws a **compact minimap** at one edge of the Markdown editor and the rendered viewer: a
 vertical stack of thin horizontal bars, one per heading, where **bar length encodes heading level**
@@ -51,35 +51,36 @@ Use a note with several headings (mix of `#`…`######`) and enough text to scro
 - [ ] **Multi-window.** With the note selected, press **Ctrl+Alt+N** (Note → *Open note in new
       window*). The minimap appears in the **new window** too and tracks its own scroll independently.
 
-## Round-3 re-check (v0.2.3)
+## Round-4 re-check (v0.2.4)
 
 Re-verify each on Joplin 3.7.x with the Markdown editor's **inline rendering ON** (Settings → Editor
-→ *Render markup in editor*), your real **dark theme** and **120% zoom**, strip on the **left**, on a
-note with a mix of `#`…`######` headings and at least one **very long** heading.
+→ *Render markup in editor*), your real **dark theme** and **120% zoom**, strip on the **left**, and —
+for Z3 — your **Cockpit panel** docked to the left of the editor. Use a note with many `#`…`######`
+headings and at least one **very long** heading.
 
-- [ ] **Q1 — Even slimmer bars + more air.** The bars are **shorter still** (H1 ≈ 20px down to H6 ≈ 6px,
-      was 28→8) and there is **visibly more breathing room** between the note text and the minimap than
-      before. It should read as a thin sliver floating clear of the text.
-- [ ] **Q2 — No TOC on transit (hover-intent).** **Swipe the mouse quickly across the strip** on your
-      way to the note list — the outline must **NOT** pop open. Now **rest the pointer on the bars for
-      about a third of a second** — it opens. The delay is tunable at Settings → Ridgeline → **Hover open
-      delay (ms)** (100–1000, default 300); raise it if a quick trip still catches it, lower it to open
-      sooner. Selecting text (button held) dragged across the bars still does **not** open it, **Esc**
-      still closes it, and moving from the bars into the open panel keeps it open.
-- [ ] **Q3 — Pointer cursor on TOC rows.** Open the outline and move the pointer over the rows — the
-      cursor is a **pointer (hand)** everywhere on the panel, in **both** the editor and the rendered
-      viewer, exactly like Cockpit's list rows. (This is the fix that failed twice before: the editor
-      panel now lives as a fixed element **outside** the CodeMirror editor, so nothing in the editor can
-      steal the cursor. Check the **real on-screen cursor**, not just the row highlight.)
-- [ ] **Q4 — Uniform inactive bars.** Look at the non-current bars — they must all look **equally bold**
-      (same thickness), with **no** bar appearing heavier than its neighbours. The **current** bar is
-      still clearly bolder (thicker + brighter + a touch longer). Try it at your usual zoom; the bars are
-      snapped to whole pixels so half-pixel fuzz no longer makes some look bold.
+- [ ] **Z1 — Vertical condensing (~2×).** The bars are packed **about twice as tightly** vertically
+      (top-to-top pitch ≈ 7px, was 15) so a heading-dense note's stack is roughly half as tall. The bar
+      **thickness is unchanged** (thin inactive, clearly bolder current). Critically, at your 120% zoom
+      the inactive bars still look **perfectly even** — no bar heavier than its neighbours. (Positions
+      are now snapped to whole **device** pixels via `devicePixelRatio`, so evenness holds at any zoom,
+      not just the old 15px-pitch special case.)
+- [ ] **Z2 — Show/hide the minimap (no relaunch).** Settings → Ridgeline → **Show minimap** → **off**:
+      the strip **vanishes** in the editor **and** the viewer, immediately, in **every** window — the
+      plugin stays enabled. Turn it back **on**: it returns. The same flip is on **Tools → Ridgeline:
+      Toggle minimap** (accelerator **Ctrl+Alt+M**). (No toolbar/panel button by design this round.)
+- [ ] **Z3 — Transit into the Cockpit panel: no popup, no stuck-open.** ① **Swipe from the note text
+      leftward across the strip into your Cockpit panel** (even at speed) — the TOC must **NOT** pop
+      open. ② Now **open the TOC** (rest on the bars) and then **move the pointer into the Cockpit
+      panel** — the TOC must **close by itself** within the grace, **without** you moving back into the
+      note or pressing Esc. Repeat crossing into the **rendered viewer** pane and into any other plugin
+      panel. Esc still closes it; dwell still opens it; click-to-jump still works.
 
-Round-1/2 behaviours (top anchor, right-aligned bars, panel overlay, single-line ellipsized rows,
-click-to-jump, multi-window, reserve mode, maxDepth, live settings) remain in force — spot-check them.
-Note P3's single-line-ellipsis rows are unchanged; the round-2 P1 finding (leading-space heading indent
-is the third-party **Wrapped Line Indent** plugin, not Ridgeline) still stands.
+Round-1/2/3 behaviours (top anchor, right-aligned bars, panel overlay, single-line ellipsized rows,
+hover-intent dwell + grace + Esc, pointer cursor on rows, uniform bars, click-to-jump, multi-window,
+reserve mode, maxDepth, live settings) remain in force — spot-check them. The round-2 P1 finding
+(leading-space heading indent is the third-party **Wrapped Line Indent** plugin, not Ridgeline) still
+stands. Internal this round (no user-visible check): the editor strip's container z-index was raised
+(50 → 200) to clear Joplin's editor UI, and the viewer's fallback tokens were re-synced to `tokens.ts`.
 
 ## Notes
 
