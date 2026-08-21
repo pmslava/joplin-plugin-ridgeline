@@ -1,4 +1,4 @@
-# Ridgeline — manual checklist (Phase 2, v0.2.4)
+# Ridgeline — manual checklist (Phase 2, v0.2.6)
 
 Ridgeline draws a **compact minimap** at one edge of the Markdown editor and the rendered viewer: a
 vertical stack of thin horizontal bars, one per heading, where **bar length encodes heading level**
@@ -51,37 +51,38 @@ Use a note with several headings (mix of `#`…`######`) and enough text to scro
 - [ ] **Multi-window.** With the note selected, press **Ctrl+Alt+N** (Note → *Open note in new
       window*). The minimap appears in the **new window** too and tracks its own scroll independently.
 
-## Round-4 re-check (v0.2.4)
+## Round-5 re-check (v0.2.6)
 
 Re-verify each on Joplin 3.7.x with the Markdown editor's **inline rendering ON** (Settings → Editor
-→ *Render markup in editor*), your real **dark theme** and **120% zoom**, strip on the **left**, and —
-for Z3 — your **Cockpit panel** docked to the left of the editor. Use a note with many `#`…`######`
-headings and at least one **very long** heading.
+→ *Render markup in editor*), your real **dark theme** and **120% zoom**, strip on the **left**. Use a
+note with headings at **several different levels** (e.g. an `#`, a couple of `##`/`###`, and a deeper
+one) and enough text to scroll.
 
-- [ ] **Z1 — Vertical condensing (~2×).** The bars are packed **about twice as tightly** vertically
-      (top-to-top pitch ≈ 7px, was 15) so a heading-dense note's stack is roughly half as tall. The bar
-      **thickness is unchanged** (thin inactive, clearly bolder current). Critically, at your 120% zoom
-      the inactive bars still look **perfectly even** — no bar heavier than its neighbours. (Positions
-      are now snapped to whole **device** pixels via `devicePixelRatio`, so evenness holds at any zoom,
-      not just the old 15px-pitch special case.)
-- [ ] **Z2 — Show/hide the minimap (no relaunch).** Settings → Ridgeline → **Show minimap** → **off**:
-      the strip **vanishes** in the editor **and** the viewer, immediately, in **every** window — the
-      plugin stays enabled. Turn it back **on**: it returns. The same flip is on **Tools → Ridgeline:
-      Toggle minimap** (accelerator **Ctrl+Alt+M**). The **note-toolbar button** (staggered-lines
-      `fa-stream` icon, in the note's top-right toolbar) also toggles the minimap.
-- [ ] **Z3 — Transit into the Cockpit panel: no popup, no stuck-open.** ① **Swipe from the note text
-      leftward across the strip into your Cockpit panel** (even at speed) — the TOC must **NOT** pop
-      open. ② Now **open the TOC** (rest on the bars) and then **move the pointer into the Cockpit
-      panel** — the TOC must **close by itself** within the grace, **without** you moving back into the
-      note or pressing Esc. Repeat crossing into the **rendered viewer** pane and into any other plugin
-      panel. Esc still closes it; dwell still opens it; click-to-jump still works.
+- [ ] **W1 — Current bar is THICKER, not LONGER.** Scroll so the current section is, say, an **H3**.
+      Its bar is **the same length as the other H3 bars** — only **thicker and brighter**. It must
+      **never** grow longer than its level (an H3 no longer masquerades as an H2). Scroll through every
+      level and confirm the current bar's *length* always equals its level's inactive length.
+- [ ] **W2 — Current bar sits CENTRED between its neighbours.** The thicker current bar is **vertically
+      centred in its slot**, so it lines up midway between the bar above and the bar below — **not
+      dropped toward the bar below it** (the old look). As you scroll and a different bar becomes
+      current, its **neighbours do not shift** — only the newly-current bar thickens/centres in place.
+- [ ] **W3 — Hide when the note has no headings.** Open a note with **no headings at all**: there is
+      **no strip** and (in *Reserve margin* mode) **no reserved margin** — the text uses the full width,
+      in both the editor and the viewer. **Type a heading** (`# Something`): the strip **appears**
+      immediately (and the margin returns in reserve mode), **no relaunch**. **Delete that last
+      heading**: it **disappears** again. Settings → Ridgeline → **Hide minimap when the note has no
+      headings** (default **on**) controls this; turn it **off** to keep the empty strip + margin as
+      before. **Show minimap = off** still hides everything regardless.
 
-Round-1/2/3 behaviours (top anchor, right-aligned bars, panel overlay, single-line ellipsized rows,
-hover-intent dwell + grace + Esc, pointer cursor on rows, uniform bars, click-to-jump, multi-window,
-reserve mode, maxDepth, live settings) remain in force — spot-check them. The round-2 P1 finding
-(leading-space heading indent is the third-party **Wrapped Line Indent** plugin, not Ridgeline) still
-stands. Internal this round (no user-visible check): the editor strip's container z-index was raised
-(50 → 200) to clear Joplin's editor UI, and the viewer's fallback tokens were re-synced to `tokens.ts`.
+Round-1/2/3/4 behaviours remain in force — spot-check them: top-anchored right-aligned bars, panel
+overlay with single-line ellipsized rows, hover-intent dwell + grace + Esc, pointer cursor on rows,
+uniform inactive bars, click-to-jump, multi-window, reserve mode, maxDepth, live settings; **Z1** (~2×
+vertical condensing, device-pixel-even bars at 120% zoom), **Z2** (Show-minimap toggle — Settings, Tools
+→ Ridgeline: Toggle minimap / Ctrl+Alt+M, and the `fa-stream` note-toolbar button — hides both surfaces
+in every window live), and **Z3** (swiping across the strip into the Cockpit panel / viewer never pops
+the TOC, and an open TOC closes itself when the pointer leaves into another pane). The round-2 P1
+finding (leading-space heading indent is the third-party **Wrapped Line Indent** plugin, not Ridgeline)
+still stands.
 
 ## Notes
 
