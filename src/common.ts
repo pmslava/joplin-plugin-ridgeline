@@ -22,12 +22,20 @@ export const EDITOR_APPLY_SETTINGS_COMMAND = 'ridgeline.applySettings';
 // test live settings, and handy for the user.
 export const TOGGLE_SIDE_COMMAND = 'ridgeline.toggleSide';
 
+// Z2: plugin command (Tools menu + accelerator Ctrl+Alt+M) that flips the "Show minimap" setting, so
+// the user can hide/show Ridgeline live in every window without disabling the plugin. No panel/toolbar
+// button this round (the user explicitly does not want one).
+export const TOGGLE_MINIMAP_COMMAND = 'ridgeline.toggleMinimap';
+
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
 // in a profile's settings.json and survive restarts.
 export const SETTING_SIDE = 'side';
 export const SETTING_EDITOR_MODE = 'editorMode';
 export const SETTING_VIEWER_MODE = 'viewerMode';
 export const SETTING_MAX_DEPTH = 'maxDepth';
+// Z2: master visibility toggle. When false the strip is fully unmounted (listeners torn down) in both
+// surfaces and every window; when true it is (re)mounted. Live via the same push/poll path.
+export const SETTING_SHOW_MINIMAP = 'showMinimap';
 // Q2: hover-intent dwell (ms) before the TOC opens. Stored as a setting so the user can tune it; the
 // coordinator folds the resolved value into the tokens it ships to both content scripts.
 export const SETTING_HOVER_OPEN_DELAY = 'hoverOpenDelayMs';
@@ -43,6 +51,8 @@ export interface RidgelineSettings {
 	viewerMode: PaneMode;
 	// Deepest heading level shown in the minimap (1-6). Headings deeper than this are omitted.
 	maxDepth: number;
+	// Z2: master visibility. false = strip fully unmounted in both surfaces / every window.
+	showMinimap: boolean;
 }
 
 export const DEFAULT_SETTINGS: RidgelineSettings = {
@@ -50,6 +60,7 @@ export const DEFAULT_SETTINGS: RidgelineSettings = {
 	editorMode: 'overlay',
 	viewerMode: 'overlay',
 	maxDepth: 6,
+	showMinimap: true,
 };
 
 // The coordinator's answer to a getSettings request: the resolved settings plus the design tokens.

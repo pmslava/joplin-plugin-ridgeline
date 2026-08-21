@@ -10,8 +10,10 @@ import {
 	SETTING_EDITOR_MODE,
 	SETTING_HOVER_OPEN_DELAY,
 	SETTING_MAX_DEPTH,
+	SETTING_SHOW_MINIMAP,
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
+	TOGGLE_MINIMAP_COMMAND,
 	TOGGLE_SIDE_COMMAND,
 	VIEWER_CONTENT_SCRIPT_ID,
 	type ContentScriptMessage,
@@ -78,6 +80,17 @@ async function registerSettings(): Promise<void> {
 			options: { 1: 'H1 only', 2: 'H1–H2', 3: 'H1–H3', 4: 'H1–H4', 5: 'H1–H5', 6: 'H1–H6' },
 			storage: SettingStorage.File,
 		},
+		[SETTING_SHOW_MINIMAP]: {
+			value: true,
+			type: SettingItemType.Bool,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Show minimap',
+			description:
+				'Show the Ridgeline strip in the editor and viewer. Turn off to hide it everywhere without ' +
+				'disabling the plugin (Tools → Ridgeline: Toggle minimap, or Ctrl+Alt+M). Applies live.',
+			storage: SettingStorage.File,
+		},
 		[SETTING_HOVER_OPEN_DELAY]: {
 			value: DESIGN_TOKENS.hoverOpenDelayMs,
 			type: SettingItemType.Int,
@@ -101,6 +114,7 @@ async function readSettings(): Promise<RidgelineSettings> {
 		SETTING_EDITOR_MODE,
 		SETTING_VIEWER_MODE,
 		SETTING_MAX_DEPTH,
+		SETTING_SHOW_MINIMAP,
 	]);
 	// Coerce defensively — a seeded/edited settings.json could carry an unexpected value.
 	const side: Side = values[SETTING_SIDE] === 'right' ? 'right' : 'left';
@@ -109,7 +123,9 @@ async function readSettings(): Promise<RidgelineSettings> {
 	let maxDepth = Number(values[SETTING_MAX_DEPTH]);
 	if (!Number.isFinite(maxDepth)) maxDepth = 6;
 	maxDepth = Math.min(6, Math.max(1, Math.round(maxDepth)));
-	return { side, editorMode, viewerMode, maxDepth };
+	// Default true: only an explicit stored `false` hides the strip.
+	const showMinimap = values[SETTING_SHOW_MINIMAP] !== false;
+	return { side, editorMode, viewerMode, maxDepth, showMinimap };
 }
 
 // The getSettings answer both content scripts read: resolved settings + the shared design tokens.
@@ -236,6 +252,24 @@ joplin.plugins.register({
 			TOGGLE_SIDE_COMMAND,
 			MenuItemLocation.Tools,
 			{ accelerator: 'Ctrl+Alt+R' },
+		);
+
+		// Z2: master visibility toggle. Flips the boolean setting, which fires joplin.settings.onChange
+		// above → both surfaces mount/unmount the strip live (editor pushed, viewer polled), in every
+		// window. Tools menu + Ctrl+Alt+M. No toolbar/panel button (the user does not want one this round).
+		await joplin.commands.register({
+			name: TOGGLE_MINIMAP_COMMAND,
+			label: 'Ridgeline: Toggle minimap',
+			execute: async () => {
+				const current = await joplin.settings.value(SETTING_SHOW_MINIMAP);
+				await joplin.settings.setValue(SETTING_SHOW_MINIMAP, current === false);
+			},
+		});
+		await joplin.views.menuItems.create(
+			'ridgeline.toggleMinimap.menu',
+			TOGGLE_MINIMAP_COMMAND,
+			MenuItemLocation.Tools,
+			{ accelerator: 'Ctrl+Alt+M' },
 		);
 
 		console.info(`[ridgeline] ${PLUGIN_ID} started`);

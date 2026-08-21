@@ -64,11 +64,15 @@ export const DESIGN_TOKENS: RidgelineTokens = {
 	// A touch longer for the current bar — scaled with the shorter bars so it still reads as "bolder"
 	// without dominating.
 	currentBarLengthBoostPx: 4,
-	// Q4: the bar PITCH (barHeight + barGap = 3 + 12 = 15) is a multiple of 5 on purpose: at the user's
-	// 120% zoom, 15 CSS px → exactly 18 device px, so every inactive bar lands on the SAME sub-device-
-	// pixel phase and antialiases identically (no "some bars look bolder"). Keep pitch a multiple of 5
-	// if you retune these.
-	barGap: 12,
+	// Z1: vertical condensing ~2×. The bar PITCH (barHeight + barGap = 3 + 4 = 7) is roughly HALF the
+	// old 15, so a heading-dense note's stack is about twice as compact — while the bar THICKNESS is
+	// unchanged (3px inactive / 5px current). The old "keep pitch a multiple of 5 so 15 CSS px = 18
+	// device px at 120% zoom" rule is retired: bars are now placed with DEVICE-PIXEL-AWARE rounding —
+	// top_i = Math.round(i * pitch * dpr) / dpr with dpr = the surface window's devicePixelRatio — so
+	// every bar's top lands on an exact integer DEVICE pixel (phase 0) at ANY zoom. That keeps every
+	// inactive bar antialiasing identically (no "some look bolder", the old Q4 bug) and frees the pitch
+	// from the multiple-of-5 constraint. Retune barGap freely; the dpr rounding keeps the phase honest.
+	barGap: 4,
 	minBarGap: 1,
 	normalOpacity: 0.45,
 	// Q1: more breathing room between the note text and the minimap — nearly doubled from 7px. Applies
