@@ -103,21 +103,33 @@ test.describe('Z3 iframe transit + stuck-open TOC', () => {
     return win.locator(EDITOR_STRIP).getAttribute('data-expanded');
   }
 
-  // (a) A fast swipe from the note area, ACROSS the strip, and INTO the adjacent iframe must NOT open
-  // the TOC — the real trip toward his Cockpit panel. Realistic continuous motion (mouse.move steps):
-  // the pointer grazes the bars (arming the dwell) then keeps going and ends inside the iframe, so the
-  // dwell never matures into a popup.
-  test('a fast transit across the strip into an iframe does NOT open the TOC', async () => {
+  // (a) FAITHFUL fast transit toward his Cockpit panel. His panel is a docked iframe on the OUTER side
+  // of the strip (the strip sits BETWEEN the note text and the panel, all on the left), so a pointer
+  // leaving the bars toward the panel crosses NO editor text first — the bars are the LAST in-document
+  // position before the iframe. That is the case the ordinary mousemove handler cannot see: with the
+  // panel iframe placed to the RIGHT (as the earlier draft had it) the sweep re-enters editor text after
+  // the bars and handlePointerMove's else-branch cancels the dwell on its own, so the test would pass
+  // with or without the boundary fix. Here we place the iframe flush against the strip's OUTER (left)
+  // edge and single-step the pointer from the bars straight into it: the editor document then sees only
+  // the mouseout(→IFRAME) — its mousemove handler never runs — so ONLY onPointerOut can cancel the armed
+  // dwell. Without the fix the timer would mature on stale coordinates and pop the panel open.
+  test('a fast transit from the bars straight into an adjacent (outer-edge) iframe does NOT open the TOC', async () => {
     const { win } = joplin;
-    await injectIframe(win, PANEL_IFRAME);
     await park(win);
     const bars = await boxOf(win, EDITOR_BARS);
+    // Dock a "Cockpit panel" iframe immediately to the LEFT of the strip: its right edge at the strip's
+    // left edge (bars.x), extending outward. No gap, no overlap with the bar hit-zone.
+    const width = Math.min(240, Math.max(80, Math.floor(bars.x) - 8));
+    const left = Math.max(0, Math.floor(bars.x) - width);
+    await injectIframe(win, { x: left, y: Math.floor(bars.y), width, height: Math.max(200, Math.ceil(bars.height)) });
+
     const y = bars.y + bars.height / 2;
-    // Start just left of the strip, sweep right across the bars and the editor text, and end inside the
-    // iframe — one continuous fast motion.
-    await win.mouse.move(bars.x - 40, y);
-    await win.mouse.move(PANEL_IFRAME.x + PANEL_IFRAME.width / 2, y, { steps: 12 });
-    // Well past the dwell: a mis-fire would have popped it open by now.
+    // Arm the dwell by resting on the bars just long enough to arm (well under the 300ms dwell), then
+    // single-step DIRECTLY into the iframe — one fast motion, no editor text in between.
+    await win.mouse.move(bars.x + bars.width / 2, y);
+    await win.waitForTimeout(60);
+    await win.mouse.move(left + width / 2, y, { steps: 1 });
+    // Well past the dwell: a mis-fire (timer maturing on stale coords) would have popped it open by now.
     await win.waitForTimeout(700);
     expect(await editorExpanded(win)).not.toBe('true');
     await removeIframe(win);
