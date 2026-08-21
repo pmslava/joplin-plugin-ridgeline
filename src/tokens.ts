@@ -43,25 +43,37 @@ export interface RidgelineTokens {
 	// Grace period (ms) before the panel collapses after the pointer leaves, so crossing the
 	// strip↔panel boundary does not flicker it shut.
 	hoverGraceMs: number;
+	// HOVER-INTENT dwell (ms): the pointer must REST over the bar hit-zone this long before the panel
+	// opens. A pointer merely crossing the strip on its way to the note list (transit takes tens of ms)
+	// must NOT pop the panel. Overridable as a plugin setting (see index.ts); the token is the default.
+	hoverOpenDelayMs: number;
 	// How often (ms) the viewer strip polls the coordinator for changed settings (its live-update
 	// mechanism, since a MarkdownIt asset has no main→iframe push channel).
 	pollMs: number;
 }
 
 export const DESIGN_TOKENS: RidgelineTokens = {
-	// Narrower, airier bars (P2): a linear H1→H6 progression capped at 28px with a 4px step, so the
-	// stack reads thinner while every adjacent level stays equally distinguishable.
-	levelLengths: { 1: 28, 2: 24, 3: 20, 4: 16, 5: 12, 6: 8 },
-	barHeight: 2,
-	currentBarHeight: 4,
-	// A touch longer for the current bar — scaled down with the shorter bars so it still reads as
-	// "bolder" without dominating.
+	// Q1: even slimmer, airier bars. A near-linear H1→H6 progression capped at 20px down to a 6px floor
+	// (step ~3px), so the stack reads as a thin sliver while every adjacent level stays distinguishable.
+	levelLengths: { 1: 20, 2: 17, 3: 14, 4: 11, 5: 8, 6: 6 },
+	// Q4: inactive bars raised 2→3px so they render solidly and uniformly (a 2px bar lands on half-pixel
+	// boundaries at the user's zoom/DPI and looks unevenly bold). The current bar stays clearly bolder
+	// at 5px (same +2px contrast as before) — plus brighter and a touch longer.
+	barHeight: 3,
+	currentBarHeight: 5,
+	// A touch longer for the current bar — scaled with the shorter bars so it still reads as "bolder"
+	// without dominating.
 	currentBarLengthBoostPx: 4,
-	// More vertical air between bars (P2): ~1.7× the previous 7px.
+	// Q4: the bar PITCH (barHeight + barGap = 3 + 12 = 15) is a multiple of 5 on purpose: at the user's
+	// 120% zoom, 15 CSS px → exactly 18 device px, so every inactive bar lands on the SAME sub-device-
+	// pixel phase and antialiases identically (no "some bars look bolder"). Keep pitch a multiple of 5
+	// if you retune these.
 	barGap: 12,
 	minBarGap: 1,
 	normalOpacity: 0.45,
-	barSideAirPx: 7,
+	// Q1: more breathing room between the note text and the minimap — nearly doubled from 7px. Applies
+	// on both sides of the stack and (in reserve mode) to the reserved text margin.
+	barSideAirPx: 12,
 	edgeGapPx: 2,
 	stripTopOffsetPx: 6,
 	panelFontPx: 12.5,
@@ -72,6 +84,9 @@ export const DESIGN_TOKENS: RidgelineTokens = {
 	panelMaxWidthFraction: 0.66,
 	panelGapPx: 0,
 	hoverGraceMs: 200,
+	// Q2: 300ms dwell before opening — long enough that a mouse crossing the strip to the note list
+	// (tens of ms) never triggers it, short enough to feel responsive on a deliberate rest.
+	hoverOpenDelayMs: 300,
 	pollMs: 700,
 };
 

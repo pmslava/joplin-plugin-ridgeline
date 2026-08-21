@@ -103,13 +103,20 @@ class EditorStrip {
 	private activeIndex = -1;
 	private expanded = false;
 	private collapseTimer: number | null = null;
+	// Q2: hover-intent. The dwell timer is armed when the pointer enters the bar hit-zone with no
+	// button pressed, and fires (opening the panel) only after it has RESTED there hoverOpenDelayMs.
+	// It is cancelled the instant the pointer leaves the zone or presses a button, so a mouse merely
+	// crossing the strip on its way to the note list never opens the panel.
+	private openTimer: number | null = null;
 	private rafPending = false;
 	private colors: SurfaceColors;
 	private readonly onScroll: () => void;
 	private readonly onResize: () => void;
+	private readonly onWinScroll: () => void;
 	private readonly onKeyDown: (event: KeyboardEvent) => void;
 	private readonly onPointerMove: (event: MouseEvent) => void;
 	private readonly onDocLeave: () => void;
+	private resizeObserver: { disconnect(): void } | null = null;
 	// Content scripts run in the main renderer's JS realm, so the global `document`/`window` are the
 	// main window's even for a secondary-window editor. Build the strip in the editor's OWN document
 	// — otherwise a secondary window would get no strip (or one adopted into the wrong doc).
@@ -145,11 +152,24 @@ class EditorStrip {
 		this.view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
 
 		this.onResize = () => {
-			this.refreshSidePosition();
+			this.reposition();
 			this.layoutBars();
 			this.scheduleUpdate();
 		};
 		this.ownerWin.addEventListener('resize', this.onResize, { passive: true });
+
+		// Q3: the strip is a FIXED element on the document body (see mount), so it must be repositioned
+		// whenever the editor pane moves or resizes — a window scroll, and any layout change to the
+		// editor element (pane split drag, sidebar/note-list toggle, panes toggle) caught by a
+		// ResizeObserver on the editor DOM.
+		this.onWinScroll = () => this.reposition();
+		this.ownerWin.addEventListener('scroll', this.onWinScroll, { passive: true, capture: true });
+		const RO = (this.ownerWin as unknown as { ResizeObserver?: new (cb: () => void) => { observe(el: Element): void; disconnect(): void } }).ResizeObserver;
+		if (typeof RO === 'function') {
+			const ro = new RO(() => this.reposition());
+			ro.observe(this.view.dom);
+			this.resizeObserver = ro;
+		}
 
 		// R6/P5: the hover trigger is the bar stack's actual bounding box (plus the open panel), not the
 		// full-height container. We hit-test the pointer on a document-level mousemove and pass the
@@ -158,7 +178,10 @@ class EditorStrip {
 		this.onPointerMove = (event: MouseEvent) =>
 			this.handlePointerMove(event.clientX, event.clientY, event.buttons);
 		this.ownerDoc.addEventListener('mousemove', this.onPointerMove, { passive: true });
-		this.onDocLeave = () => this.scheduleCollapse();
+		this.onDocLeave = () => {
+			this.cancelOpen();
+			this.scheduleCollapse();
+		};
 		this.ownerDoc.addEventListener('mouseleave', this.onDocLeave);
 
 		this.onKeyDown = (event: KeyboardEvent) => {
@@ -202,18 +225,28 @@ class EditorStrip {
 		};
 	}
 
-	private refreshSidePosition(): void {
+	// Q3: position the FIXED container to track the editor pane. Reads the scroller's viewport rect and
+	// pins the strip to its top-left (or top-right) edge. Hidden when the editor is not laid out.
+	private reposition(): void {
 		const s = this.container.style;
-		// Bars are RIGHT-aligned within the strip on BOTH sides (flush right edge, ragged left).
-		this.container.setAttribute('data-side', this.settings.side);
-		if (this.settings.side === 'right') {
-			s.right = `${this.measureScrollbarWidth()}px`;
-			s.left = '';
-		} else {
-			s.left = '0';
-			s.right = '';
+		const rect = this.view.scrollDOM.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) {
+			s.display = 'none';
+			return;
 		}
-		this.container.style.alignItems = 'flex-end';
+		s.display = 'flex';
+		this.container.setAttribute('data-side', this.settings.side);
+		const total = stripTotalWidth(this.tokens);
+		s.top = `${Math.round(rect.top)}px`;
+		s.height = `${Math.round(rect.height)}px`;
+		s.width = `${total}px`;
+		s.right = '';
+		if (this.settings.side === 'right') {
+			// Tuck just inside the vertical scrollbar on the right edge of the pane.
+			s.left = `${Math.round(rect.right - this.measureScrollbarWidth() - total)}px`;
+		} else {
+			s.left = `${Math.round(rect.left)}px`;
+		}
 	}
 
 	private applyBaseStyle(): void {
@@ -221,39 +254,39 @@ class EditorStrip {
 		this.container.setAttribute('data-mode', this.settings.editorMode);
 
 		const s = this.container.style;
-		s.position = 'absolute';
-		// R1: anchor the stack to the TOP of the pane (small offset), not vertically centred.
-		s.top = '0';
-		s.bottom = '0';
+		// Q3: FIXED on the document body (not absolute inside .cm-editor) so no CodeMirror layer or CM
+		// cursor rule can ever sit over the panel or win the cursor — the whole reason the pointer cursor
+		// kept not showing on the real machine while clean-profile specs passed. Positioned to the pane
+		// via reposition().
+		s.position = 'fixed';
 		s.paddingTop = `${this.tokens.stripTopOffsetPx}px`;
 		s.width = `${stripTotalWidth(this.tokens)}px`;
-		s.zIndex = '5';
+		// Above the editor content but comfortably below Joplin's dialogs/menus.
+		s.zIndex = '50';
 		s.boxSizing = 'border-box';
 		s.background = 'transparent';
 		s.display = 'flex';
 		s.flexDirection = 'column';
 		s.justifyContent = 'flex-start';
+		s.alignItems = 'flex-end';
 		// R6: the full-height container must NOT capture pointer events (it would swallow hover/clicks
 		// over the text in the empty band). Only the bar stack and the open panel are interactive.
 		s.pointerEvents = 'none';
 		s.overflow = 'visible';
 
 		const bw = this.barsWrap.style;
-		bw.display = 'flex';
-		bw.flexDirection = 'column';
+		// Q4: bars are absolutely positioned on an integer pixel PITCH (see renderBars/layoutBars) rather
+		// than distributed by a flex gap, so every inactive bar lands on an exact integer y and the
+		// current bar can thicken without reflowing (and thus visually shifting) the bars below it.
+		bw.position = 'relative';
 		bw.overflow = 'hidden';
 		bw.maxHeight = '100%';
 		bw.width = '100%';
 		bw.boxSizing = 'border-box';
-		// R2: bars right-aligned within the strip. P2: a side-air padding on the right holds the bars
-		// off the strip's right edge; the strip being wider than the longest bar leaves matching air on
-		// the left — so the stack floats with breathing room on BOTH sides.
-		bw.alignItems = 'flex-end';
-		bw.paddingRight = `${this.tokens.barSideAirPx}px`;
 		bw.pointerEvents = 'auto';
 		bw.cursor = 'pointer';
 
-		this.refreshSidePosition();
+		this.reposition();
 		this.stylePanelShell();
 	}
 
@@ -303,10 +336,11 @@ class EditorStrip {
 	}
 
 	private mount(): void {
-		const parent = this.view.scrollDOM.parentElement ?? this.view.dom;
-		// .cm-editor is position:relative in CodeMirror's base theme, so an absolutely-positioned
-		// child anchors to the editor pane.
-		parent.appendChild(this.container);
+		// Q3: mount on the editor's OWN document body (multi-window-safe), NOT inside .cm-editor. A
+		// fixed-position element on <body> is fully outside CodeMirror's DOM and CSS scope, so CM's
+		// cursor rules and stacking layers can never touch the panel — exactly what made the pointer
+		// cursor unreliable when the panel lived inside the editor. reposition() keeps it on the pane.
+		this.ownerDoc.body.appendChild(this.container);
 	}
 
 	public setHeadings(headings: EditorHeading[]): void {
@@ -318,6 +352,7 @@ class EditorStrip {
 	}
 
 	// Compress the inter-bar gap so a very tall stack still fits the pane; never below the token floor.
+	// Kept an INTEGER (Math.floor) so the bar pitch stays whole-pixel (Q4).
 	private currentGap(): number {
 		const n = this.headings.length;
 		if (n <= 1) return this.tokens.barGap;
@@ -328,16 +363,27 @@ class EditorStrip {
 		return Math.max(this.tokens.minBarGap, Math.min(this.tokens.barGap, fitGap));
 	}
 
+	// Q4: the integer pixel distance from one bar's top to the next.
+	private pitch(): number {
+		return this.tokens.barHeight + this.currentGap();
+	}
+
+	// Q4: place every bar at an EXACT integer y on a fixed pitch (absolute positioning), and size the
+	// hit-zone box to bound them. Inactive bars therefore all share the same rendered height and land on
+	// integer positions; the current bar (taller) grows downward without reflowing its neighbours.
 	private layoutBars(): void {
-		this.barsWrap.style.rowGap = `${this.currentGap()}px`;
-		// R2: bars are always right-aligned (flush right edge, ragged left) regardless of side.
-		this.barsWrap.style.alignItems = 'flex-end';
+		const pitch = this.pitch();
+		for (let i = 0; i < this.bars.length; i++) {
+			this.bars[i].style.top = `${i * pitch}px`;
+		}
+		const n = this.bars.length;
+		const boxHeight = n > 0 ? (n - 1) * pitch + this.tokens.currentBarHeight : 0;
+		this.barsWrap.style.height = `${boxHeight}px`;
 	}
 
 	private renderBars(): void {
 		this.barsWrap.textContent = '';
 		this.bars = [];
-		this.layoutBars();
 
 		this.headings.forEach((heading, index) => {
 			const bar = this.ownerDoc.createElement('div');
@@ -352,11 +398,14 @@ class EditorStrip {
 			bar.title = heading.text;
 
 			const b = bar.style;
+			// Q4: absolute on an integer pitch, right-aligned via `right` (flush right edge, ragged left)
+			// so a longer/current bar extends leftward without moving its right edge or its neighbours.
+			b.position = 'absolute';
+			b.right = `${this.tokens.barSideAirPx}px`;
 			b.height = `${this.tokens.barHeight}px`;
 			b.width = `${barLengthFor(this.tokens, heading.level)}px`;
 			b.background = this.colors.normalBar;
 			b.borderRadius = '2px';
-			b.flex = '0 0 auto';
 			b.cursor = 'pointer';
 
 			bar.addEventListener('click', (event) => {
@@ -368,6 +417,7 @@ class EditorStrip {
 			this.barsWrap.appendChild(bar);
 			this.bars.push(bar);
 		});
+		this.layoutBars();
 	}
 
 	private renderPanel(): void {
@@ -451,8 +501,8 @@ class EditorStrip {
 	}
 
 	public update(): void {
-		this.refreshSidePosition();
-		this.barsWrap.style.rowGap = `${this.currentGap()}px`;
+		this.reposition();
+		this.layoutBars();
 
 		const active = this.computeActiveIndex();
 		this.activeIndex = active;
@@ -492,27 +542,52 @@ class EditorStrip {
 		return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
 	}
 
-	// R6/P5 hover driver: expand while the pointer HOVERS the bar stack (or the open panel) with no
-	// button pressed; collapse otherwise. Passing the button state means a text-selection drag
-	// (buttons !== 0) crossing the minimap never opens the panel. An already-open panel stays open
-	// while the pointer is over it even if a button goes down (so clicking a row does not collapse it).
+	// Q2 hover-intent driver. While the pointer is over the bar hit-zone (or the open panel) with no
+	// button pressed, arm a DWELL timer; the panel opens only once that timer elapses — i.e. the pointer
+	// actually rested there. A quick transit across the strip leaves the zone (or the app-level
+	// mouseleave fires) before the timer elapses, so it never opens. A held button (selection drag)
+	// cancels the timer, so dragging a selection across the minimap neither opens the panel nor blocks
+	// the selection. Once open, staying over the bars/panel keeps it open (cancels the collapse grace).
 	private handlePointerMove(x: number, y: number, buttons: number): void {
 		if (this.headings.length === 0) return;
 		const overBars = this.pointInRect(x, y, this.barsWrap.getBoundingClientRect());
 		const overPanel = this.expanded && this.pointInRect(x, y, this.panel.getBoundingClientRect());
 		if (overBars || overPanel) {
-			// expand() is idempotent and cancels any pending collapse; only OPEN on a button-free hover.
-			if (this.expanded || buttons === 0) this.expand();
-		} else if (this.expanded) {
-			this.scheduleCollapse();
+			this.cancelCollapse();
+			if (this.expanded) return;
+			if (buttons === 0) this.armOpen();
+			else this.cancelOpen(); // a drag entered the zone — do not open
+		} else {
+			this.cancelOpen();
+			if (this.expanded) this.scheduleCollapse();
 		}
 	}
 
-	private expand(): void {
+	// Arm the dwell timer (idempotent: a timer already ticking is left to run).
+	private armOpen(): void {
+		if (this.openTimer !== null || this.expanded) return;
+		this.openTimer = this.ownerWin.setTimeout(() => {
+			this.openTimer = null;
+			this.expand();
+		}, Math.max(0, this.tokens.hoverOpenDelayMs));
+	}
+
+	private cancelOpen(): void {
+		if (this.openTimer !== null) {
+			this.ownerWin.clearTimeout(this.openTimer);
+			this.openTimer = null;
+		}
+	}
+
+	private cancelCollapse(): void {
 		if (this.collapseTimer !== null) {
 			this.ownerWin.clearTimeout(this.collapseTimer);
 			this.collapseTimer = null;
 		}
+	}
+
+	private expand(): void {
+		this.cancelCollapse();
 		if (this.expanded) return;
 		if (this.headings.length === 0) return;
 		this.expanded = true;
@@ -533,6 +608,7 @@ class EditorStrip {
 	}
 
 	private collapse(): void {
+		this.cancelOpen();
 		this.expanded = false;
 		this.panel.style.display = 'none';
 		this.container.setAttribute('data-expanded', 'false');
@@ -550,10 +626,16 @@ class EditorStrip {
 	public destroy(): void {
 		this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
 		this.ownerWin.removeEventListener('resize', this.onResize);
+		this.ownerWin.removeEventListener('scroll', this.onWinScroll, { capture: true } as EventListenerOptions);
 		this.ownerWin.removeEventListener('keydown', this.onKeyDown);
 		this.ownerDoc.removeEventListener('mousemove', this.onPointerMove);
 		this.ownerDoc.removeEventListener('mouseleave', this.onDocLeave);
+		if (this.resizeObserver) {
+			this.resizeObserver.disconnect();
+			this.resizeObserver = null;
+		}
 		if (this.collapseTimer !== null) this.ownerWin.clearTimeout(this.collapseTimer);
+		if (this.openTimer !== null) this.ownerWin.clearTimeout(this.openTimer);
 		this.container.remove();
 	}
 }

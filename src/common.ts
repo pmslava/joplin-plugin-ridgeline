@@ -28,6 +28,11 @@ export const SETTING_SIDE = 'side';
 export const SETTING_EDITOR_MODE = 'editorMode';
 export const SETTING_VIEWER_MODE = 'viewerMode';
 export const SETTING_MAX_DEPTH = 'maxDepth';
+// Q2: hover-intent dwell (ms) before the TOC opens. Stored as a setting so the user can tune it; the
+// coordinator folds the resolved value into the tokens it ships to both content scripts.
+export const SETTING_HOVER_OPEN_DELAY = 'hoverOpenDelayMs';
+export const HOVER_OPEN_DELAY_MIN = 100;
+export const HOVER_OPEN_DELAY_MAX = 1000;
 
 export type Side = 'left' | 'right';
 export type PaneMode = 'overlay' | 'reserve';

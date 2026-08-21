@@ -20,14 +20,14 @@
 	// Fallback only — the real tokens arrive from the coordinator (settings.tokens). Kept in sync with
 	// src/tokens.ts so a failed round-trip still looks right.
 	var FALLBACK_TOKENS = {
-		levelLengths: { 1: 28, 2: 24, 3: 20, 4: 16, 5: 12, 6: 8 },
-		barHeight: 2,
-		currentBarHeight: 4,
+		levelLengths: { 1: 20, 2: 17, 3: 14, 4: 11, 5: 8, 6: 6 },
+		barHeight: 3,
+		currentBarHeight: 5,
 		currentBarLengthBoostPx: 4,
 		barGap: 12,
 		minBarGap: 1,
 		normalOpacity: 0.45,
-		barSideAirPx: 7,
+		barSideAirPx: 12,
 		edgeGapPx: 2,
 		stripTopOffsetPx: 6,
 		panelFontPx: 12.5,
@@ -38,6 +38,7 @@
 		panelMaxWidthFraction: 0.6,
 		panelGapPx: 0,
 		hoverGraceMs: 200,
+		hoverOpenDelayMs: 300,
 		pollMs: 700,
 	};
 
@@ -205,6 +206,7 @@
 		if (strip.docleave) document.removeEventListener('mouseleave', strip.docleave);
 		if (strip.keydown) window.removeEventListener('keydown', strip.keydown);
 		if (strip.collapseTimer) clearTimeout(strip.collapseTimer);
+		if (strip.openTimer) clearTimeout(strip.openTimer);
 		if (strip.el && strip.el.parentNode) strip.el.parentNode.removeChild(strip.el);
 		strip = null;
 	}
@@ -244,20 +246,19 @@
 		if (side === 'right') { s.right = verticalScrollbarWidth() + 'px'; s.left = ''; }
 		else { s.left = '0'; s.right = ''; }
 
+		// Q4: the bars are absolutely positioned on an integer pixel PITCH (barHeight + gap) rather than
+		// spaced by a flex gap, so every inactive bar lands on an exact integer y and renders at the same
+		// height; the current bar (taller) grows downward without reflowing the bars below it.
+		var pitch = tokens.barHeight + currentGap(count);
 		var barsWrap = document.createElement('div');
 		barsWrap.className = 'ridgeline-bars';
 		var bw = barsWrap.style;
-		bw.display = 'flex';
-		bw.flexDirection = 'column';
-		bw.alignItems = 'flex-end';
-		bw.rowGap = currentGap(count) + 'px';
+		bw.position = 'relative';
 		bw.overflow = 'hidden';
 		bw.maxHeight = '100%';
 		bw.width = '100%';
 		bw.boxSizing = 'border-box';
-		// P2: side-air padding holds the bars off the strip's right edge; the wider strip leaves matching
-		// air on the left, so the stack floats with breathing room on both sides.
-		bw.paddingRight = barSideAir() + 'px';
+		bw.height = (count > 0 ? (count - 1) * pitch + tokens.currentBarHeight : 0) + 'px';
 		// R6: the bar stack is the hover trigger zone and is interactive.
 		bw.pointerEvents = 'auto';
 		bw.cursor = 'pointer';
@@ -312,11 +313,14 @@
 			bar.setAttribute('data-testid', 'ridgeline-viewer-tick-' + index);
 			bar.title = text;
 			var b = bar.style;
+			// Q4: absolute on an integer pitch, right-aligned via `right` (flush right edge, ragged left).
+			b.position = 'absolute';
+			b.right = barSideAir() + 'px';
+			b.top = (index * pitch) + 'px';
 			b.height = tokens.barHeight + 'px';
 			b.width = tokenLength(level) + 'px';
 			b.background = colors.normalBar;
 			b.borderRadius = '2px';
-			b.flex = '0 0 auto';
 			b.cursor = 'pointer';
 			bar.addEventListener('click', function (event) {
 				event.preventDefault();
@@ -406,8 +410,15 @@
 
 		var expanded = false;
 		var collapseTimer = null;
+		var openTimer = null;
+		function cancelOpen() {
+			if (openTimer) { clearTimeout(openTimer); openTimer = null; if (strip) strip.openTimer = null; }
+		}
+		function cancelCollapse() {
+			if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; if (strip) strip.collapseTimer = null; }
+		}
 		function expand() {
-			if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
+			cancelCollapse();
 			if (expanded || count === 0) return;
 			expanded = true;
 			panel.style.display = 'block';
@@ -415,6 +426,7 @@
 			if (activeIndex >= 0 && rows[activeIndex]) rows[activeIndex].scrollIntoView({ block: 'nearest' });
 		}
 		function collapse() {
+			cancelOpen();
 			expanded = false;
 			panel.style.display = 'none';
 			el.setAttribute('data-expanded', 'false');
@@ -424,22 +436,33 @@
 			collapseTimer = setTimeout(function () { collapseTimer = null; collapse(); }, tokens.hoverGraceMs);
 			if (strip) strip.collapseTimer = collapseTimer;
 		}
-		// R6/P5: the hover trigger is the bar stack's actual bounding box (plus the open panel), tested
-		// on a document-level mousemove. The panel OPENS only when no mouse button is pressed
-		// (event.buttons === 0), so dragging a text selection across the minimap neither opens the panel
-		// nor blocks the selection. An already-open panel stays open while the pointer is over it even if
-		// a button goes down (so clicking a row does not collapse it).
+		// Q2: arm the hover-intent dwell timer; the panel opens only after the pointer RESTS on the bars
+		// hoverOpenDelayMs. Idempotent — a running timer is left to elapse.
+		function armOpen() {
+			if (openTimer || expanded) return;
+			var delay = typeof tokens.hoverOpenDelayMs === 'number' ? tokens.hoverOpenDelayMs : FALLBACK_TOKENS.hoverOpenDelayMs;
+			openTimer = setTimeout(function () { openTimer = null; if (strip) strip.openTimer = null; expand(); }, Math.max(0, delay));
+			if (strip) strip.openTimer = openTimer;
+		}
+		// Q2 hover-intent: while over the bars/panel with no button pressed, arm the dwell timer; a quick
+		// transit leaves the zone before it elapses and never opens. A held button (selection drag)
+		// cancels it, so dragging a selection across the minimap neither opens the panel nor blocks the
+		// selection. Once open, staying over the bars/panel keeps it open (cancels the collapse grace).
 		var pointermove = function (event) {
 			if (count === 0) return;
 			var overBars = pointInRect(event.clientX, event.clientY, barsWrap.getBoundingClientRect());
 			var overPanel = expanded && pointInRect(event.clientX, event.clientY, panel.getBoundingClientRect());
 			if (overBars || overPanel) {
-				if (expanded || event.buttons === 0) expand();
-			} else if (expanded) {
-				scheduleCollapse();
+				cancelCollapse();
+				if (expanded) return;
+				if (event.buttons === 0) armOpen();
+				else cancelOpen();
+			} else {
+				cancelOpen();
+				if (expanded) scheduleCollapse();
 			}
 		};
-		var docleave = function () { if (expanded) scheduleCollapse(); };
+		var docleave = function () { cancelOpen(); if (expanded) scheduleCollapse(); };
 		var keydown = function (event) { if (event.key === 'Escape' && expanded) collapse(); };
 		document.addEventListener('mousemove', pointermove, { passive: true });
 		document.addEventListener('mouseleave', docleave);
@@ -449,7 +472,7 @@
 		applyReserveMargin();
 		updateActive();
 
-		strip = { el: el, scrollHandler: scrollHandler, pointermove: pointermove, docleave: docleave, keydown: keydown, collapseTimer: collapseTimer };
+		strip = { el: el, scrollHandler: scrollHandler, pointermove: pointermove, docleave: docleave, keydown: keydown, collapseTimer: collapseTimer, openTimer: openTimer };
 	}
 
 	function jump(anchor) {

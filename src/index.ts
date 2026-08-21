@@ -4,8 +4,11 @@ import {
 	EDITOR_APPLY_SETTINGS_COMMAND,
 	EDITOR_CONTENT_SCRIPT_ID,
 	EDITOR_SCROLL_COMMAND,
+	HOVER_OPEN_DELAY_MAX,
+	HOVER_OPEN_DELAY_MIN,
 	PLUGIN_ID,
 	SETTING_EDITOR_MODE,
+	SETTING_HOVER_OPEN_DELAY,
 	SETTING_MAX_DEPTH,
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
@@ -75,6 +78,20 @@ async function registerSettings(): Promise<void> {
 			options: { 1: 'H1 only', 2: 'H1–H2', 3: 'H1–H3', 4: 'H1–H4', 5: 'H1–H5', 6: 'H1–H6' },
 			storage: SettingStorage.File,
 		},
+		[SETTING_HOVER_OPEN_DELAY]: {
+			value: DESIGN_TOKENS.hoverOpenDelayMs,
+			type: SettingItemType.Int,
+			minimum: HOVER_OPEN_DELAY_MIN,
+			maximum: HOVER_OPEN_DELAY_MAX,
+			step: 50,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Hover open delay (ms)',
+			description:
+				'How long the pointer must rest on the bars before the outline opens. Higher = a quick ' +
+				'mouse trip across the strip never pops it open; lower = opens sooner. 100–1000ms.',
+			storage: SettingStorage.File,
+		},
 	});
 }
 
@@ -97,9 +114,14 @@ async function readSettings(): Promise<RidgelineSettings> {
 
 // The getSettings answer both content scripts read: resolved settings + the shared design tokens.
 // The viewer strip (a plain-JS iframe asset that cannot import tokens.ts) gets its tokens from here.
+// The user-tunable hover-open delay (Q2) is folded into the tokens so both surfaces read it from the
+// same one place, alongside the compile-time design tokens.
 async function readSettingsResponse(): Promise<SettingsResponse> {
 	const settings = await readSettings();
-	return { ...settings, tokens: DESIGN_TOKENS };
+	let delay = Number(await joplin.settings.value(SETTING_HOVER_OPEN_DELAY));
+	if (!Number.isFinite(delay)) delay = DESIGN_TOKENS.hoverOpenDelayMs;
+	delay = Math.min(HOVER_OPEN_DELAY_MAX, Math.max(HOVER_OPEN_DELAY_MIN, Math.round(delay)));
+	return { ...settings, tokens: { ...DESIGN_TOKENS, hoverOpenDelayMs: delay } };
 }
 
 // Dual-fire the jump exactly like cqroot/joplin-outline: scrollToHash moves the rendered viewer to
