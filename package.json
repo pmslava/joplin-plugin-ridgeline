@@ -5,7 +5,7 @@
   "homepage": "https://github.com/pmslava/joplin-plugin-ridgeline",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pmslava/joplin-plugin-ridgeline"
+    "url": "git+https://github.com/pmslava/joplin-plugin-ridgeline.git"
   },
   "publishConfig": {
     "access": "public"
