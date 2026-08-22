@@ -12,6 +12,11 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
+  // Resource-discipline guard (e2e/guard.ts): before any worker spawns Joplin, globalSetup acquires a
+  // single machine-wide lock, sweeps orphaned Joplin/Xvfb/profile leftovers from previous dead runs,
+  // and applies a soft RAM gate; globalTeardown releases the lock. See e2e/guard.ts for the rationale.
+  globalSetup: './e2e/global-setup.ts',
+  globalTeardown: './e2e/global-teardown.ts',
   // Launching Joplin + waiting for the plugin to register can take a while on a cold profile, and
   // some tests wait out more than one of the panel's fallback refresh intervals.
   timeout: 240_000,

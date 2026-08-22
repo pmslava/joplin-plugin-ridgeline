@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as net from 'net';
+import { registerInstance, unregisterInstance } from './guard';
 
 /**
  * Launch a real Joplin desktop (Electron) instance with the Ridgeline plugin loaded as a
@@ -175,8 +176,13 @@ async function startInstance(profileDir: string): Promise<JoplinInstance> {
         }`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Own process group so the guard's signal teardown can SIGKILL the whole Joplin tree (main +
+      // renderer/gpu/zygote children) with process.kill(-pid) if this run is interrupted.
+      detached: true,
     }
   );
+  // Track this instance so a crash/signal (which skips afterAll) can still reap it. See e2e/guard.ts.
+  registerInstance(child, profileDir);
 
   try {
     await waitForCDP(port, 90_000);
@@ -191,6 +197,7 @@ async function startInstance(profileDir: string): Promise<JoplinInstance> {
       /* ignore */
     }
     await waitForExit(child, 10_000);
+    unregisterInstance(child);
     throw error;
   }
 }
@@ -266,6 +273,9 @@ export async function closeJoplin(
   }
   await waitForExit(instance.child, 15_000);
   await new Promise((r) => setTimeout(r, 2000));
+  // The child has exited: drop it from the guard's live-instance registry so a later signal never
+  // targets a recycled pid, and never re-deletes this profile. (Happy-path kill/rm logic unchanged.)
+  unregisterInstance(instance.child);
   if (opts.keepProfile) return;
   try {
     fs.rmSync(instance.profileDir, { recursive: true, force: true });
