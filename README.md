@@ -19,7 +19,7 @@ Ridgeline draws a compact stack of thin bars down the edge of your note — one 
 ## Features
 
 - **Compact level-encoded minimap.** One thin bar per heading; the bar length encodes the heading level (H1 longest … H6 shortest), so the note's structure reads at a glance from a sliver of edge space.
-- **Live current-section tracking.** The bar for the section at the top of the viewport is brightened and thickened and follows your scrolling in real time, centred in its slot so it never looks like it dropped toward a neighbour.
+- **Live current-section tracking.** The bar for the section at the top of the viewport is brightened and thickened and follows your scrolling in real time.
 - **Hover-intent table of contents.** Let the pointer rest on the bars (a short dwell, so a mouse merely crossing the strip never pops it open) and the stack expands into a full clickable outline, indented by level, with the current heading highlighted. Click a bar or a row to jump.
 - **Editor and viewer, in step.** The strip is drawn in both the raw Markdown editor and the rendered note viewer, and a jump from either pane moves both.
 - **Overlay or reserve.** Draw the strip over the text, or reserve a thin margin so it never overlaps a word — set independently for the editor and the viewer.
@@ -46,7 +46,7 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 | **Maximum heading depth** | H1–H6 | The deepest heading level shown. Headings deeper than this are dropped from the minimap and the outline. |
 | **Show minimap** | On | Master switch for the strip in both panes. Toggle without disabling the plugin (see the command below). |
 | **Hide minimap when the note has no headings** | On | On a heading-less note, hide the strip and drop its reserved margin so the text uses the full width. |
-| **Show the toolbar toggle button** | On | Show the `fa-stream` note-toolbar button that toggles the minimap. **Takes effect only after restarting Joplin** — unlike every other setting here, this one is not live, because the plugin API cannot remove a toolbar button once created. The Tools menu item and `Ctrl+Alt+M` keep working regardless. |
+| **Show the toolbar toggle button** | On | Show the `fa-stream` note-toolbar button that toggles the minimap. **Takes effect only after restarting Joplin** — the plugin API cannot remove a toolbar button once created. The Tools menu item and `Ctrl+Alt+M` keep working regardless. |
 | **Hover open delay (ms)** | 300 | How long the pointer must rest on the bars before the outline opens (100–1000 ms). Higher = a quick trip across the strip never opens it. |
 
 ### Commands and shortcuts

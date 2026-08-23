@@ -2,8 +2,7 @@
 
 This is the release flow for `joplin-plugin-ridgeline`. It **mirrors the pipeline of
 [joplin-plugin-cockpit](https://github.com/pmslava/joplin-plugin-cockpit)** — same two-workflow shape,
-same npm trusted-publishing (OIDC) setup, same "E2E is excluded from the publish gate" decision. If you
-have released Cockpit, none of this will be new.
+same npm trusted-publishing (OIDC) setup, same "E2E is excluded from the publish gate" decision.
 
 Ridgeline ships to the Joplin plugin catalogue the same way every Joplin plugin does: it is published
 to **npm** as a package that carries the built `.jpl`, and the Joplin plugin repository harvests npm for
@@ -130,10 +129,9 @@ writes it into `package.json` + `src/manifest.json`, runs the fast gate (`tsc --
 + the `.jpl` check), and then publishes to npm via **OIDC trusted publishing**.
 
 **Never run `npm publish` manually.** There are **no npm tokens anywhere** — not in the repo, not in
-GitHub secrets, not on any laptop — and it must stay that way. The release event is the only thing that
-publishes; a manual publish would bypass provenance and the whole trusted-publishing model. If you ever
-feel the urge to "just publish it by hand", the answer is to fix whatever made the release workflow fail,
-not to reach for a token.
+GitHub secrets, not on any laptop — and it must stay that way. A manual publish would bypass provenance
+and the whole trusted-publishing model; if a release fails, fix the workflow rather than reaching for a
+token.
 
 Watch `publish.yml` in the Actions tab; the **"Show the OIDC claims npm will present"** step prints
 (never the token) the claims npm sends to the registry — if the publish ever fails with `ENEEDAUTH`,
@@ -169,22 +167,20 @@ authoritative and immediate.)
 
 **Why E2E is deliberately excluded from the publish gate:** the E2E job downloads a ~150 MB Joplin build
 and launches it many times — minutes of work that would make every release slow and flaky for no added
-safety at publish time. The real-app suite already runs on every push and pull request via `tests.yml`,
-and the release-gate order above requires that exact SHA to be green there before you cut the release, so
-the code being released has been through it. The publish gate only needs to prove the artifact
-type-checks and builds. This matches Cockpit, where the real-app E2E is likewise kept off the publish
-path.
+safety. `tests.yml` already runs the real-app suite on every push, and the gate order above requires that
+exact SHA to be green there before you cut the release, so the released code has been through it. The
+publish gate only needs to prove the artifact type-checks and builds. (Cockpit does the same.)
 
 ## npm trusted publishing (and the first-release bootstrap)
 
 Trusted publishing means there is **no `NPM_TOKEN` secret**. npm is told to trust this repository and
 this workflow, and the job exchanges a short-lived GitHub OIDC token for publish rights.
 
-### First release (bootstrap) — one time only
+### First release (bootstrap) — done once, for v0.2.7
 
-**The very first publish of this package is done by hand.** This is the **one sanctioned exception** to
+**The very first publish of this package was done by hand.** That was the **one sanctioned exception** to
 the [never-`npm publish`-by-hand rule](#the-publish-is-automatic-never-npm-publish-by-hand), and it
-exists for a concrete npm limitation, not for convenience:
+existed for a concrete npm limitation, not for convenience:
 
 > A trusted publisher can only be configured on a package that **already exists** on npm. npm has **no
 > pending / pre-registration** — there is no way to declare a trusted publisher for a name before that
@@ -193,39 +189,32 @@ exists for a concrete npm limitation, not for convenience:
 
 That is a chicken-and-egg at birth: the release workflow can only publish via OIDC once the trusted
 publisher is configured, but the trusted publisher can only be configured once the package exists. The
-bootstrap breaks the loop by publishing the first version manually, configuring trust on the
-now-existing package, then removing the local token so the repository returns to its steady
-**no-tokens-anywhere** state.
+bootstrap broke the loop by publishing the first version manually, configuring trust on the now-existing
+package, then removing the local token so the repository returned to its steady **no-tokens-anywhere**
+state.
 
-Do it **exactly once**, in this order:
+**This is a record, not a step to repeat.** What was done, in order, for `v0.2.7`:
 
-1. **Prove the gates**, in the normal order: local fast gate green → local E2E green → push `main` → the
-   GitHub **Tests** workflow green **on that exact pushed SHA** (see
-   [The gates, in order](#the-gates-in-order)). The commit you are about to publish must already be green.
-2. **`npm login`** — interactive; complete 2FA / hardware-key 2FA when prompted. This writes a **temporary local
-   token into `~/.npmrc`**. This is the only moment a token exists anywhere, and step 7 removes it.
-3. **`npm run dist`** — build `publish/io.github.pmslava.ridgeline.jpl` from the exact commit you proved
-   green.
-4. **`npm publish`** — the manual publish. This creates the package on npm for the very first time.
-5. **Verify it landed:** `npm view joplin-plugin-ridgeline version` reports the version you just
-   published.
-6. **Configure the trusted publisher** on the **now-existing** package: npmjs.com → the
-   `joplin-plugin-ridgeline` package → **Settings → Trusted publisher** → fill in
-   [the table below](#the-trusted-publisher-configuration). This is only possible now that step 4 made
-   the package exist.
-7. **`npm logout`** — invalidates and removes the temporary token from `~/.npmrc`, restoring the
-   **no-tokens-anywhere** state (no token in the repo, in GitHub secrets, or on any laptop).
-8. **Cut the GitHub Release** the normal way (see [Releasing](#releasing)). Publishing the release fires
-   `publish.yml` for a version that is **already on npm** — its **idempotency guard** detects that
-   (`npm view … version` equals the tag) and **skips the publish step, finishing the job GREEN** with a
-   log line like `0.2.7 already on npm — skipping publish (bootstrap or re-run)`. So this first release
-   does not double-publish, and the workflow still runs green end to end.
+1. Proved the gates in the normal order — local fast gate → local E2E → pushed `main` → `tests.yml` green
+   on that exact SHA (see [The gates, in order](#the-gates-in-order)).
+2. `npm login` — interactive, with 2FA. This wrote a **temporary local token into `~/.npmrc`**, the only
+   moment a token existed anywhere.
+3. `npm run dist` — built the `.jpl` from the commit proved green.
+4. `npm publish` — the manual publish that created the package on npm for the first and only time.
+5. `npm view joplin-plugin-ridgeline version` — confirmed it landed.
+6. Configured the **trusted publisher** on the now-existing package (npmjs.com → the
+   `joplin-plugin-ridgeline` package → **Settings → Trusted publisher**, with
+   [the values below](#the-trusted-publisher-configuration)) — only possible once step 4 made it exist.
+7. `npm logout` — invalidated and removed the temporary token, restoring the **no-tokens-anywhere** state.
+8. Cut the GitHub Release the normal way. `publish.yml` fired for a version **already on npm**, and its
+   **idempotency guard** detected that and skipped the publish step, finishing the job GREEN
+   (`0.2.7 already on npm — skipping publish (bootstrap or re-run)`). That guard is still in place, so
+   re-running the workflow on an already-published version is safe.
 
-From the **second release onward there is no manual step**: the trusted publisher is configured, the
-token is gone, and every release publishes through `publish.yml` via OIDC exactly as
+**Every release since has been fully automatic** — the trusted publisher is configured, the token is
+gone, and `publish.yml` publishes via OIDC exactly as
 [The publish is automatic](#the-publish-is-automatic-never-npm-publish-by-hand) describes. The bootstrap
-above is the **only** time `npm publish` is ever run by hand — the never-manual rule holds unchanged for
-every release after the first.
+was the only time `npm publish` was ever run by hand.
 
 ### The trusted-publisher configuration
 

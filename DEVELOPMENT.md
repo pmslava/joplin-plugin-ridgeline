@@ -6,15 +6,8 @@ see [PUBLISHING.md](PUBLISHING.md).
 
 ## Building
 
-```
-git clone https://github.com/pmslava/joplin-plugin-ridgeline
-cd joplin-plugin-ridgeline
-npm install
-npm run dist
-```
-
-`npm run dist` builds the publishable plugin to `publish/io.github.pmslava.ridgeline.jpl`. To type-check
-without building, run `npx tsc --noEmit`.
+`npm install && npm run dist` builds the publishable plugin to
+`publish/io.github.pmslava.ridgeline.jpl`. To type-check without building, run `npx tsc --noEmit`.
 
 ## End-to-end tests
 
@@ -35,9 +28,8 @@ JOPLIN_E2E_VERSION=3.7.6 npm run setup:e2e
 ```
 
 `npm run test:e2e` runs the whole suite in one process (it wraps `playwright test` in `xvfb-run`). The
-suite launches Joplin many times serially, so a full single-command run takes roughly **14 minutes** and
-is uncomfortable to sit through on a laptop — there is effectively no fast single-command path. It is far
-more comfortable to run it in **four shards**, each in the foreground:
+suite launches Joplin many times serially, so a full run takes roughly **14 minutes**. To break that into
+shorter foreground chunks, run it in **four shards**:
 
 ```
 npm run dist
@@ -49,34 +41,36 @@ xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test --shard=4
 ```
 
 The `-screen 0 1920x1080x24` server args give the virtual display enough room for the split-pane layouts
-the specs assert against.
-
-Run the four shards **sequentially** on the laptop — one foreground command finishing before the next —
-never concurrently. Parallel `xvfb-run` invocations multiply the RAM and /tmp load and risk the desktop
-collapses described below.
+the specs assert against. Run the shards **sequentially** — one foreground command finishing before the
+next starts — never concurrently.
 
 ### Resource discipline (laptop)
 
-After two desktop collapses on 2026-08-21, treat a local E2E run as a heavyweight job:
+A local E2E run is a heavyweight job: it launches a real Joplin desktop repeatedly on a 16 GiB laptop,
+and two runs stacked on each other collapsed the XFCE session twice on 2026-08-21. `e2e/guard.ts`
+(wired in as Playwright's `globalSetup`/`globalTeardown`) now enforces the discipline automatically:
 
-- The harness is already headless (`xvfb-run -a`, auto-numbered virtual display) and serial within a run
-  (`workers:1`) — test windows never touch the live display. The laptop risks are RAM and /tmp, not
-  displays.
-- ONE E2E run machine-wide: before starting, `pgrep -f e2e-cache` must be empty (covers cockpit +
-  ridgeline + all worktrees). Don't shard locally into parallel `xvfb-run` invocations.
-- RAM gate: check `free -h` before a run; don't launch Joplin instances when available memory is under
-  ~4G. earlyoom SIGTERMs the session's processes below 10% available — a desktop collapse costs more than
-  a deferred test run.
-- /tmp is a 7.7G tmpfs shared with the live desktop. Point bulk scratch (`TMPDIR`) at disk, clean session
-  task scratch after runs, never let /tmp approach 100% — a full /tmp breaks glycin PNG decoding and can
-  kill the whole XFCE session (libwnck `g_assert`, incident #1).
-- Reap orphans after any killed/crashed run (teardown only runs on the happy path): stray Joplin
-  processes whose cmdline contains `.e2e-cache`, leftover `Xvfb` servers (`pgrep -a Xvfb`), stale
-  `/tmp/.X*-lock` files, and `e2e/.profiles/profile-*` dirs.
-- Always launch via `npm run test:e2e` — a bare `npx playwright test` would inherit the live `:0`
-  display.
+- **One run machine-wide.** A lock directory under `~/.cache` — shared by every plugin repo and worktree
+  on this machine — is acquired before any Joplin spawns; a second run aborts with a clear error instead
+  of stacking. This is why parallel `xvfb-run` invocations are pointless as well as dangerous.
+- **Pre-run orphan sweep.** Leftovers from a previously killed run are reaped before the new one starts:
+  Joplin processes launched from this repo's `.e2e-cache/squashfs-root`, orphaned `Xvfb` servers carrying
+  the harness's server-args (plus their stale `/tmp/.X*-lock` files), and `e2e/.profiles/profile-*` dirs.
+- **RAM gate.** The run aborts below 3 GiB of `MemAvailable`; `E2E_IGNORE_RAM=1` overrides, and CI only
+  warns. earlyoom SIGTERMs the session's processes below 10% available, and a desktop collapse costs more
+  than a deferred test run.
+- **Signal teardown.** SIGINT/SIGTERM/uncaught exceptions SIGKILL each live Joplin process *group* and
+  remove its profile, so an interrupted run no longer leaks.
+
+What the guard cannot do for you:
+
+- **Keep /tmp clear.** It is a 7.7G tmpfs shared with the live desktop. Point bulk scratch (`TMPDIR`) at
+  disk and never let /tmp approach 100% — a full /tmp breaks glycin PNG decoding and can kill the whole
+  XFCE session.
+- **Give you a display.** Always run under `xvfb-run` (`npm run test:e2e` does it for you); a bare
+  `npx playwright test` would inherit the live `:0` display.
 - A `/tmp/appimage_extracted_*` Joplin is NEVER the harness — that's the real desktop app in
-  extract-and-run fallback; remove the stale extraction once the app isn't using it.
+  extract-and-run fallback, and the sweep deliberately never touches it.
 
 ## Regenerating the showcase screenshots
 
@@ -102,7 +96,8 @@ touches your real Joplin profile.
   - `common.ts` — shared helpers.
   - `contentScripts/` — the CodeMirror editor extension and the rendered-viewer script.
   - `manifest.json` — the plugin manifest (id, version, `app_min_version`, screenshots).
-- `e2e/` — the Playwright end-to-end specs, plus `launch.ts`/`helpers.ts` for driving Joplin and
+- `e2e/` — the Playwright end-to-end specs (16 spec files), plus `launch.ts`/`helpers.ts` for driving
+  Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.
 - `webpack.config.js`, `plugin.config.json`, `tsconfig.json` — the build.

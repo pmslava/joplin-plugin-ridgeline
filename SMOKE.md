@@ -61,6 +61,9 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
 - [ ] **Hover intent.** A quick trip *across* the strip (into another pane) does **not** pop the TOC —
       only a deliberate dwell does. An already-open TOC closes itself when the pointer leaves into
       another pane (a side panel or the viewer).
+- [ ] **Hover open delay (live).** Settings → Ridgeline → **Hover open delay (ms)** (default **300**,
+      range 100–1000). Raise it to 1000 — the dwell needed before the TOC opens is visibly longer, with
+      no relaunch. Set it back to 300.
 - [ ] **Click to jump.** Click a row in the expanded TOC (or click a bar) — the editor jumps to that
       heading. In split view the rendered note follows too.
 
@@ -119,9 +122,8 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
 - Leading-space indentation of a heading in the editor, if seen, comes from the third-party **Wrapped
   Line Indent** plugin, not Ridgeline.
 - Design tokens (bar lengths per level, thickness, gaps, hover-panel sizing, colours' opacity) all
-  live in **one file**, `src/tokens.ts`. Change a number there, rebuild, and both surfaces update —
-  the editor imports them directly and the viewer receives them from the coordinator's settings
-  response.
+  live in **one file**, `src/tokens.ts`. Change a number there, rebuild, and both surfaces update.
 - Settings are stored in file storage, so they persist across restarts and can be pre-seeded in a
   profile's `settings.json` under `plugin-io.github.pmslava.ridgeline.<key>` (`side`, `editorMode`,
-  `viewerMode`, `maxDepth`) — this is how the E2E suite exercises them without clicking through the UI.
+  `viewerMode`, `maxDepth`, `showMinimap`, `hideWhenEmpty`, `showToolbarButton`) — this is how the E2E
+  suite exercises them without clicking through the UI.
