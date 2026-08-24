@@ -51,8 +51,11 @@ and two runs stacked on each other collapsed the XFCE session twice on 2026-08-2
 (wired in as Playwright's `globalSetup`/`globalTeardown`) now enforces the discipline automatically:
 
 - **One run machine-wide.** A lock directory under `~/.cache` — shared by every plugin repo and worktree
-  on this machine — is acquired before any Joplin spawns; a second run aborts with a clear error instead
-  of stacking. This is why parallel `xvfb-run` invocations are pointless as well as dangerous.
+  on this machine — is acquired before any Joplin spawns. A run that finds it held **waits its turn**
+  rather than stacking a second Joplin: it names the holder (the lock carries the owner's repo path and
+  start time), prints progress every 30 s, and gives up only after `E2E_LOCK_WAIT_MS` (default 10
+  minutes; `0` restores fail-fast). This is why parallel `xvfb-run` invocations are pointless as well as
+  dangerous — the second one just queues.
 - **Pre-run orphan sweep.** Leftovers from a previously killed run are reaped before the new one starts:
   Joplin processes launched from this repo's `.e2e-cache/squashfs-root`, orphaned `Xvfb` servers carrying
   the harness's server-args (plus their stale `/tmp/.X*-lock` files), and `e2e/.profiles/profile-*` dirs.

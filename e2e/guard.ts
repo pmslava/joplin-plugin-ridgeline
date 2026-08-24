@@ -15,7 +15,8 @@ import * as path from 'path';
  *
  * This module fixes both without touching plugin source:
  *   - A single machine-wide lock (a directory under ~/.cache, shared by all three plugin repos) so
- *     only ONE E2E run may be active at a time.
+ *     only ONE E2E run may be active at a time; a run that finds the lock held queues behind the
+ *     holder instead of failing on the spot.
  *   - A deterministic pre-run orphan sweep that reaps leftovers from previous dead runs, anchored on
  *     THIS repo's absolute `.e2e-cache/squashfs-root` path so it can never touch the user's real
  *     desktop Joplin (which runs from /tmp/.mount_*).
@@ -43,9 +44,39 @@ const PROFILES_ROOT = path.join(REPO_ROOT, 'e2e', '.profiles');
 const XVFB_SERVER_ARGS = '-screen 0 1920x1080x24';
 
 // One lock for ALL three plugin repos on this machine (same $HOME), so two runs cannot stack Joplins.
-// A directory is used because mkdir is atomic; the pid of the owning run is written inside it.
+// PROTOCOL — must stay identical in every sibling repo, or the repos stop excluding each other:
+//   * the lock is the DIRECTORY below (mkdir is an atomic test-and-set on every filesystem);
+//   * the holder writes its pid into `<lock>/pid`; a lock whose pid is not alive is stale and may be
+//     reclaimed; `<lock>/owner` is an advisory extra (repo path + start time) a waiter reports and a
+//     sibling repo that does not write it is still fully compatible;
+//   * the holder removes the directory to release.
 const LOCK_DIR = path.join(os.homedir(), '.cache', 'joplin-plugin-e2e.lock');
 const LOCK_PID_FILE = path.join(LOCK_DIR, 'pid');
+const LOCK_OWNER_FILE = path.join(LOCK_DIR, 'owner');
+
+/**
+ * How long to queue behind a live run before giving up (`E2E_LOCK_WAIT_MS` overrides; 0 = fail fast).
+ * Two sibling repos are routinely driven from two sessions, and a run that simply waits its turn is
+ * worth far more than one that aborts and leaves a human to poll by hand. The budget is added to the
+ * suite's globalTimeout locally (see playwright.config.ts), so waiting never eats the suite's time.
+ */
+export const LOCK_WAIT_MS = resolveLockWaitMs();
+const LOCK_POLL_MS = 2_000;
+const LOCK_PROGRESS_MS = 30_000;
+/**
+ * A lock whose `pid` file has not appeared yet is presumed LIVE for this long. The holder writes its
+ * pid microseconds after the mkdir, so a pid-less lock is almost always a run that has just this
+ * instant taken it — reading that as "stale" would let a second run break a live lock (observed with
+ * five acquirers polling in lockstep). Only a pid-less lock older than this is debris.
+ */
+const LOCK_PID_GRACE_MS = 30_000;
+
+function resolveLockWaitMs(): number {
+  const raw = process.env.E2E_LOCK_WAIT_MS;
+  if (raw === undefined || raw.trim() === '') return 10 * 60_000;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10 * 60_000;
+}
 
 // Abort a local run below this much available memory: a cold Joplin (3.7.x) launch needs headroom.
 const RAM_GATE_BYTES = 3 * 1024 * 1024 * 1024; // 3 GiB
@@ -69,6 +100,15 @@ let weOwnLock = false;
 function log(msg: string): void {
   // eslint-disable-next-line no-console
   console.log(`[e2e-guard] ${msg}`);
+}
+
+function warn(msg: string): void {
+  // eslint-disable-next-line no-console
+  console.warn(`[e2e-guard] ${msg}`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -172,49 +212,172 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-export function acquireLock(): void {
-  fs.mkdirSync(path.dirname(LOCK_DIR), { recursive: true }); // ensure ~/.cache exists
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      fs.mkdirSync(LOCK_DIR); // atomic: throws EEXIST if another run holds it
-      fs.writeFileSync(LOCK_PID_FILE, String(process.pid), 'utf8');
-      weOwnLock = true;
-      log(`acquired machine-wide E2E lock ${LOCK_DIR} (pid ${process.pid})`);
-      return;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      const holder = readLockPid();
-      if (holder && holder !== process.pid && pidAlive(holder)) {
-        throw new Error(
-          `Another Joplin E2E run is active (pid ${holder}); one run machine-wide — resource discipline.\n` +
-            `Lock: ${LOCK_DIR}. If you are certain no run is active, remove that directory and retry.`
-        );
-      }
-      // Stale lock (holder dead or pid file unreadable): reclaim it, then retry the atomic create.
-      log(`reclaiming stale E2E lock ${LOCK_DIR} (dead holder ${holder ?? 'unknown'})`);
-      try {
-        fs.rmSync(LOCK_DIR, { recursive: true, force: true });
-      } catch {
-        /* next mkdir will surface any real problem */
-      }
-    }
+/** How long the lock directory has existed, or Infinity when it cannot be stat'ed. */
+function lockAgeMs(): number {
+  try {
+    return Date.now() - fs.statSync(LOCK_DIR).mtimeMs;
+  } catch {
+    return Infinity;
   }
-  throw new Error(`Could not acquire E2E lock ${LOCK_DIR} after reclaiming a stale holder.`);
 }
 
+/** The holder's advisory description ("<repo> since <time>"), or null when it wrote none. */
+function readLockOwner(): string | null {
+  try {
+    const owner = fs.readFileSync(LOCK_OWNER_FILE, 'utf8').trim();
+    return owner.length > 0 ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+function describeHolder(pid: number | null, owner: string | null): string {
+  const who = pid === null ? 'unknown pid' : `pid ${pid}`;
+  return owner ? `${who}, ${owner}` : who;
+}
+
+function formatDuration(ms: number): string {
+  const total = Math.round(ms / 1000);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return mins > 0 ? `${mins}m${String(secs).padStart(2, '0')}s` : `${secs}s`;
+}
+
+type LockAttempt =
+  | { status: 'acquired' }
+  /** A live run holds the lock; the caller decides whether to wait. */
+  | { status: 'held'; pid: number | null; owner: string | null }
+  /** A stale lock was broken, or another process won a race — retry immediately. */
+  | { status: 'retry' };
+
+/** One atomic attempt at the lock. Never blocks: the waiting policy lives in acquireLock(). */
+function tryTakeLock(): LockAttempt {
+  try {
+    fs.mkdirSync(LOCK_DIR); // atomic test-and-set: throws EEXIST if the lock is held
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const holder = readLockPid();
+    if (holder !== null && pidAlive(holder)) {
+      return { status: 'held', pid: holder, owner: readLockOwner() };
+    }
+    if (holder === null && lockAgeMs() < LOCK_PID_GRACE_MS) {
+      // The lock exists but names no pid yet: whoever won the mkdir a moment ago is about to write
+      // it. Treat that as held — breaking it here is exactly how two runs both end up "owning" it.
+      return { status: 'held', pid: null, owner: null };
+    }
+    // Stale: the holder is gone (crashed / SIGKILLed before its teardown). Break it by RENAMING the
+    // directory aside rather than removing it in place — rename(2) succeeds for exactly one process,
+    // so two reclaimers racing cannot both conclude they own the lock (the loser gets ENOENT, sees
+    // 'retry' and comes back round to a plain mkdir).
+    warn(`reclaiming stale E2E lock ${LOCK_DIR} (dead holder ${holder ?? 'unknown'})`);
+    const aside = `${LOCK_DIR}.stale-${process.pid}-${Date.now()}`;
+    try {
+      fs.renameSync(LOCK_DIR, aside);
+    } catch {
+      return { status: 'retry' }; // another process broke it first
+    }
+    try {
+      fs.rmSync(aside, { recursive: true, force: true });
+    } catch {
+      /* the lock is already gone as far as the protocol is concerned */
+    }
+    return { status: 'retry' };
+  }
+
+  weOwnLock = true;
+  try {
+    fs.writeFileSync(LOCK_PID_FILE, String(process.pid), 'utf8'); // first: a pid-less lock is ambiguous
+    fs.writeFileSync(LOCK_OWNER_FILE, `${REPO_ROOT} since ${new Date().toISOString()}`, 'utf8');
+  } catch {
+    /* both files are advisory; the directory itself is the lock */
+  }
+  return { status: 'acquired' };
+}
+
+/**
+ * Acquire the machine-wide lock, queueing behind a live run rather than failing on the spot: two
+ * sibling repos are routinely driven from two sessions, and the point of the lock is to serialise
+ * them, not to make a human poll. A stale lock left by a dead run is reclaimed at once. Gives up
+ * after LOCK_WAIT_MS with an error that names the holder. Must be called before anything spawns.
+ */
+export async function acquireLock(): Promise<void> {
+  fs.mkdirSync(path.dirname(LOCK_DIR), { recursive: true }); // ensure ~/.cache exists
+  const startedAt = Date.now();
+  const deadline = startedAt + LOCK_WAIT_MS;
+  let announced = false;
+  let lastProgress = startedAt;
+  let breaks = 0;
+
+  for (;;) {
+    const attempt = tryTakeLock();
+    if (attempt.status === 'acquired') {
+      const waited = Date.now() - startedAt;
+      log(
+        `acquired machine-wide E2E lock ${LOCK_DIR} (pid ${process.pid})` +
+          (announced ? ` after waiting ${formatDuration(waited)}` : '')
+      );
+      return;
+    }
+    if (attempt.status === 'retry') {
+      // Each retry means someone (us or another acquirer) just broke a stale lock, so the loop makes
+      // progress; the cap only guarantees termination if the lock directory is somehow pathological.
+      if (++breaks > 100) {
+        throw new Error(`Could not settle the E2E lock ${LOCK_DIR}: it keeps reappearing stale.`);
+      }
+      await sleep(50);
+      continue;
+    }
+
+    const holder = describeHolder(attempt.pid, attempt.owner);
+    if (LOCK_WAIT_MS === 0) {
+      throw new Error(
+        `Another Joplin E2E run is active (${holder}); one run machine-wide — resource discipline.\n` +
+          `Lock: ${LOCK_DIR}\nUnset E2E_LOCK_WAIT_MS=0 to queue behind it instead.`
+      );
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Another Joplin E2E run is STILL active after waiting ` +
+          `${formatDuration(Date.now() - startedAt)} (${holder}); one run machine-wide — resource ` +
+          `discipline.\nLock: ${LOCK_DIR}\nRetry once that run finishes, raise the budget with ` +
+          `E2E_LOCK_WAIT_MS=<ms>, or — only if you are certain no run is active — remove that ` +
+          `directory.`
+      );
+    }
+    if (!announced) {
+      announced = true;
+      lastProgress = Date.now();
+      log(
+        `machine-wide E2E lock is held by a live run (${holder}); one run machine-wide — waiting ` +
+          `up to ${formatDuration(LOCK_WAIT_MS)} for it to finish (E2E_LOCK_WAIT_MS to change).`
+      );
+    } else if (Date.now() - lastProgress >= LOCK_PROGRESS_MS) {
+      lastProgress = Date.now();
+      log(
+        `still waiting for the E2E lock — ${formatDuration(Date.now() - startedAt)} elapsed, ` +
+          `${formatDuration(deadline - Date.now())} left (holder ${holder} is alive)`
+      );
+    }
+    await sleep(LOCK_POLL_MS);
+  }
+}
+
+/** Release the machine-wide lock, but only if this process owns it. Safe to call repeatedly. */
 export function releaseLock(): void {
   if (!weOwnLock) return;
+  weOwnLock = false;
+  // Never remove a directory that is no longer ours: if a stale-lock reclaim elsewhere ever took it
+  // from us, deleting it would hand a third run the lock a live run is holding.
+  const holder = readLockPid();
+  if (holder !== null && holder !== process.pid) {
+    warn(`E2E lock ${LOCK_DIR} is now held by pid ${holder}; leaving it alone`);
+    return;
+  }
   try {
-    // Only remove a lock we still own — never clobber a newer run that reclaimed a stale lock.
-    const holder = readLockPid();
-    if (holder === null || holder === process.pid) {
-      fs.rmSync(LOCK_DIR, { recursive: true, force: true });
-      log(`released machine-wide E2E lock ${LOCK_DIR}`);
-    }
+    fs.rmSync(LOCK_DIR, { recursive: true, force: true });
+    log(`released machine-wide E2E lock ${LOCK_DIR}`);
   } catch {
     /* ignore */
-  } finally {
-    weOwnLock = false;
   }
 }
 
@@ -406,7 +569,8 @@ installSignalHandlers();
 
 export async function globalSetup(): Promise<void> {
   log('globalSetup: acquiring lock, sweeping orphans, checking RAM');
-  acquireLock();
+  // Waits out a live run (E2E_LOCK_WAIT_MS, default 10 min); throws only if it never gets the lock.
+  await acquireLock();
   try {
     await sweepOrphans();
     ramGate();

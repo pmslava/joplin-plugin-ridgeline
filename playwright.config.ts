@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { LOCK_WAIT_MS } from './e2e/guard';
 
 /**
  * Playwright config for the real-app Joplin end-to-end tests.
@@ -13,8 +14,9 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   // Resource-discipline guard (e2e/guard.ts): before any worker spawns Joplin, globalSetup acquires a
-  // single machine-wide lock, sweeps orphaned Joplin/Xvfb/profile leftovers from previous dead runs,
-  // and applies a soft RAM gate; globalTeardown releases the lock. See e2e/guard.ts for the rationale.
+  // single machine-wide lock — shared with every sibling plugin repo, queueing behind a run that is
+  // already going — sweeps orphaned Joplin/Xvfb/profile leftovers from previous dead runs, and applies
+  // a soft RAM gate; globalTeardown releases the lock. See e2e/guard.ts for the rationale.
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   // Launching Joplin + waiting for the plugin to register can take a while on a cold profile, and
@@ -26,7 +28,12 @@ export default defineConfig({
   // and a busy machine and a single unsharded `npm run test:e2e` can approach that. The cap is set
   // well above the realistic worst case so it only ever fires on a genuine hang, never on a slow-but-
   // healthy run. Raise this, not lower it, if you add more Joplin-launching describe blocks.
-  globalTimeout: 35 * 60_000,
+  //
+  // globalTimeout covers globalSetup too, so time spent queueing for the machine-wide lock would
+  // otherwise come out of the suite's budget. Locally the lock-wait budget is therefore ADDED on top
+  // (the suite still gets its full 35 minutes after its turn comes); on CI each repo has its own VM,
+  // the lock is never contended, and the cap stays exactly where the job's 45-minute limit needs it.
+  globalTimeout: 35 * 60_000 + (process.env.CI ? 0 : LOCK_WAIT_MS),
   expect: { timeout: 20_000 },
   // A single Joplin instance at a time.
   fullyParallel: false,
