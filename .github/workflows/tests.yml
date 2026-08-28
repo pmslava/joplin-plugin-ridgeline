@@ -7,9 +7,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Fast gate: type-check and build the plugin. Ridgeline has no unit-harness layer (the whole plugin
-  # is exercised by the real-app E2E suite below), so the fast checks are `tsc --noEmit` plus a full
-  # `npm run dist` that must actually emit the .jpl. This is the job the publish workflow gates on.
+  # Fast gate: audit, type-check and build the plugin. Ridgeline has no unit-harness layer (the whole
+  # plugin is exercised by the real-app E2E suite below), so the fast checks are the sandbox-proxy
+  # source audit, `tsc --noEmit`, and a full `npm run dist` that must actually emit the .jpl. This is
+  # the job the publish workflow gates on.
   build:
     name: Type-check & build
     runs-on: ubuntu-24.04
@@ -46,6 +47,12 @@ jobs:
             }
             console.log("Version is consistent at " + pkg + " across all four version places.");
           '
+      # Structural audit of the sandbox-proxy discipline: `joplin` is sandboxProxy(wrappedTarget), where
+      # a member READ pushes a segment onto a shared pending-call path and only a CALL pops one. A read
+      # left uncalled therefore corrupts every later call on that chain (the laurent22/joplin#4569
+      # class), and no type-check or build can see it. Source-only and instant, so it runs first.
+      - name: Audit the sandbox-proxy read-and-call discipline
+        run: npm run test:sandbox-proxy
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build the plugin

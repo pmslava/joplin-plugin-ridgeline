@@ -1,13 +1,40 @@
 # Developing Ridgeline
 
-Everything a contributor needs beyond the quick build in the [README](README.md): the end-to-end test
-suite, regenerating the showcase screenshots, and a tour of the repository layout. For the release flow,
-see [PUBLISHING.md](PUBLISHING.md).
+Everything a contributor needs beyond the quick build in the [README](README.md): the static checks, the
+end-to-end test suite, regenerating the showcase screenshots, and a tour of the repository layout. For
+the release flow, see [PUBLISHING.md](PUBLISHING.md).
 
 ## Building
 
 `npm install && npm run dist` builds the publishable plugin to
 `publish/io.github.pmslava.ridgeline.jpl`. To type-check without building, run `npx tsc --noEmit`.
+
+## Static checks
+
+Ridgeline has no unit-harness layer — the plugin is exercised by the real-app E2E suite below. What it
+does have is one source audit that no type-check or build could ever replace:
+
+```
+npm run test:sandbox-proxy
+```
+
+`joplin` is not an object, it is `sandboxProxy(wrappedTarget)`. Its get trap **pushes** the property
+name onto a shared pending-call path and only the apply trap **pops** a segment, so a `joplin.*` member
+that is read without being called in the same expression leaves that path permanently one segment too
+long — and every later call on it is rejected by the host with `Property or method X does not exist
+in ...` ([joplin#4569](https://github.com/laurent22/joplin/issues/4569)). The classic way in is a probe:
+
+```ts
+const panels = joplin.views.panels;   // WRONG: one get, no call
+if (typeof panels.create === 'function') { … }
+```
+
+which is doubly useless, because a proxy member is *always* truthy and *always* `typeof 'function'`. The
+API cannot be feature-detected by inspection — only called and caught. So the rule the audit enforces
+over `src/` is: **every `joplin.*` chain must be one uninterrupted read-and-call**, with `(` as the next
+character. Namespace capture is rejected too, even though the proxy nominally tolerates one. A violation
+fails the check with `file:line` and the offending chain, and it runs in CI as the first step of the
+build gate the publish flow depends on.
 
 ## End-to-end tests
 
@@ -103,6 +130,7 @@ touches your real Joplin profile.
   Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.
+- `scripts/audit-sandbox-proxy.js` — the sandbox-proxy read-and-call audit described above.
 - `webpack.config.js`, `plugin.config.json`, `tsconfig.json` — the build.
 - `playwright.config.ts` — the E2E runner configuration.
 - `docs/images/` — the screenshots referenced by the README and manifest.
