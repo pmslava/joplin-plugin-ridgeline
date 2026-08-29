@@ -46,7 +46,7 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 | **Maximum heading depth** | H1–H6 | The deepest heading level shown. Headings deeper than this are dropped from the minimap and the outline. |
 | **Show minimap** | On | Master switch for the strip in both panes. Toggle without disabling the plugin (see the command below). |
 | **Hide minimap when the note has no headings** | On | On a heading-less note, hide the strip and drop its reserved margin so the text uses the full width. |
-| **Show the toolbar toggle button** | On | Show the `fa-stream` note-toolbar button that toggles the minimap. **Takes effect only after restarting Joplin** — the plugin API cannot remove a toolbar button once created. The Tools menu item and `Ctrl+Alt+M` keep working regardless. |
+| **Show the toolbar toggle button** | On | Show the `fa-stream` note-toolbar button that toggles the minimap. **Takes effect only after restarting Joplin** — the plugin API cannot remove a toolbar button once created. The **Tools → Ridgeline** menu entry and `Ctrl+Alt+M` keep working regardless. |
 | **Hover open delay (ms)** | 300 | How long the pointer must rest on the bars before the outline opens (100–1000 ms). Higher = a quick trip across the strip never opens it. |
 
 ### Commands and shortcuts
@@ -57,7 +57,9 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 | **Ridgeline: Toggle strip side (left/right)** | `Ctrl+Alt+R` | — |
 | **Ridgeline: Toggle hide-when-empty** | `Ctrl+Alt+H` | — |
 
-All three are also in the **Tools** menu, and each flips the matching setting so both panes update live.
+All three also sit together in the **Tools → Ridgeline** submenu, listed there under the same full
+names as above (Joplin labels a plugin menu entry from its command, so the `Ridgeline:` prefix is
+repeated inside the submenu). Each flips the matching setting, so both panes update live.
 
 ## Development
 

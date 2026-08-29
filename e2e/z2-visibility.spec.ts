@@ -12,9 +12,9 @@ import {
 
 /**
  * Z2 — VISIBILITY CONTROL. A boolean "Show minimap" setting (default true) hides/shows the strip in
- * BOTH surfaces, in EVERY window, live (no relaunch). A "Ridgeline: Toggle minimap" command (Tools
- * menu, accelerator Ctrl+Alt+M) flips it. Hidden = fully unmounted (listeners torn down), not merely
- * invisible.
+ * BOTH surfaces, in EVERY window, live (no relaunch). A "Ridgeline: Toggle minimap" command (Tools →
+ * Ridgeline submenu, accelerator Ctrl+Alt+M) flips it. Hidden = fully unmounted (listeners torn down),
+ * not merely invisible.
  *
  * This exercises the COMMAND path (which sets the setting, firing joplin.settings.onChange → editor
  * strip pushed live, viewer strip polled), asserting the editor strip DETACHES and the viewer strip is

@@ -168,8 +168,9 @@ test.describe('W3 hideWhenEmpty=false — the empty strip + margin are kept', ()
  * ITSELF is what crosses the visibility boundary (the heading count never changes), isolating the live
  * setting-change path from the typing-a-heading path already covered above.
  *
- * The flip is driven by the registered "Ridgeline: Toggle hide-when-empty" command (Tools menu,
- * accelerator Ctrl+Alt+H), which calls joplin.settings.setValue — exactly the user-facing live path.
+ * The flip is driven by the registered "Ridgeline: Toggle hide-when-empty" command (Tools → Ridgeline
+ * submenu, accelerator Ctrl+Alt+H), which calls joplin.settings.setValue — exactly the user-facing
+ * live path.
  */
 
 // Fire the hide-when-empty toggle via its accelerator (focus the editor first so the accelerator lands).

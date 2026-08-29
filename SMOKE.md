@@ -86,29 +86,31 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
 - [ ] **Live settings.** Every Ridgeline setting applies immediately, in every open window, without a
       relaunch.
 - [ ] **Side = right (live).** Settings → Ridgeline → *Strip side* → **Right** (or run
-      **Tools → Ridgeline: Toggle strip side**, accelerator **Ctrl+Alt+R**). Both strips move to the
-      **right** edge immediately, **no relaunch** (the editor one tucked just inside the scrollbar).
+      **Tools → Ridgeline → Ridgeline: Toggle strip side**, accelerator **Ctrl+Alt+R**). Both strips
+      move to the **right** edge immediately, **no relaunch** (the editor one tucked just inside the
+      scrollbar).
 - [ ] **Reserve mode.** Settings → Ridgeline → set *Editor strip mode* / *Viewer strip mode* to
       **Reserve margin**. The text is pushed clear of the compact strip so it is no longer drawn over.
       The hover TOC still **overlays** the text (reserve only reserves the compact width). In *Overlay*
       mode the compact strip sits on top of the text.
 - [ ] **Show-minimap toggle.** Toggle *Show minimap* three ways — Settings → Ridgeline, **Tools →
-      Ridgeline: Toggle minimap** (accelerator **Ctrl+Alt+M**), and the `fa-stream` note-toolbar button.
-      Each hides both surfaces in every window live. **Show minimap = off** hides everything regardless
-      of the other settings.
+      Ridgeline → Ridgeline: Toggle minimap** (accelerator **Ctrl+Alt+M**), and the `fa-stream`
+      note-toolbar button. Each hides both surfaces in every window live. **Show minimap = off** hides
+      everything regardless of the other settings.
 - [ ] **Show the toolbar toggle button (restart required).** Settings → Ridgeline → turn **Show the
       toolbar toggle button** *off*. Nothing changes yet — this setting is **not live** (the plugin API
       cannot remove a toolbar button at runtime). **Fully quit and relaunch Joplin**: the `fa-stream`
-      note-toolbar button is now **gone**, while **Tools → Ridgeline: Toggle minimap** and **Ctrl+Alt+M**
-      still toggle the strip. Turn it back **on** and relaunch — the button **returns**.
+      note-toolbar button is now **gone**, while **Tools → Ridgeline → Ridgeline: Toggle minimap** and
+      **Ctrl+Alt+M** still toggle the strip. Turn it back **on** and relaunch — the button **returns**.
 - [ ] **Hide when the note has no headings.** Open a note with **no headings at all**: there is **no
       strip** and (in *Reserve margin* mode) **no reserved margin** — the text uses the full width, in
       both the editor and the viewer. **Type a heading** (`# Something`): the strip **appears**
       immediately (and the margin returns in reserve mode), **no relaunch**. **Delete that last
       heading**: it **disappears** again. Settings → Ridgeline → **Hide minimap when the note has no
-      headings** (default **on**) controls this; turn it **off** (or run **Tools → Ridgeline: Toggle
-      hide-when-empty**, accelerator **Ctrl+Alt+H**) to keep the empty strip + margin. With a
-      heading-less note open, toggling it flips the empty strip + margin on/off **live**, no relaunch.
+      headings** (default **on**) controls this; turn it **off** (or run **Tools → Ridgeline →
+      Ridgeline: Toggle hide-when-empty**, accelerator **Ctrl+Alt+H**) to keep the empty strip +
+      margin. With a heading-less note open, toggling it flips the empty strip + margin on/off
+      **live**, no relaunch.
 
 ## Multi-window
 

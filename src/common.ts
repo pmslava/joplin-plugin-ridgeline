@@ -22,14 +22,15 @@ export const EDITOR_APPLY_SETTINGS_COMMAND = 'ridgeline.applySettings';
 // test live settings, and handy for the user.
 export const TOGGLE_SIDE_COMMAND = 'ridgeline.toggleSide';
 
-// Z2: plugin command (Tools menu + accelerator Ctrl+Alt+M + a fa-stream note-toolbar button) that
-// flips the "Show minimap" setting, so the user can hide/show Ridgeline live in every window without
-// disabling the plugin.
+// Z2: plugin command (Tools → Ridgeline submenu + accelerator Ctrl+Alt+M + a fa-stream note-toolbar
+// button) that flips the "Show minimap" setting, so the user can hide/show Ridgeline live in every
+// window without disabling the plugin.
 export const TOGGLE_MINIMAP_COMMAND = 'ridgeline.toggleMinimap';
 
-// W3: plugin command (Tools menu + accelerator Ctrl+Alt+H) that flips the "hideWhenEmpty" setting, so
-// the user can turn the hide-on-heading-less-note behaviour on/off live in every window. Flipping it
-// fires the same settings.onChange path (editor pushed, viewer polled) that mounts/unmounts the strip.
+// W3: plugin command (Tools → Ridgeline submenu + accelerator Ctrl+Alt+H) that flips the
+// "hideWhenEmpty" setting, so the user can turn the hide-on-heading-less-note behaviour on/off live in
+// every window. Flipping it fires the same settings.onChange path (editor pushed, viewer polled) that
+// mounts/unmounts the strip.
 export const TOGGLE_HIDE_WHEN_EMPTY_COMMAND = 'ridgeline.toggleHideWhenEmpty';
 
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
@@ -49,7 +50,8 @@ export const SETTING_HIDE_WHEN_EMPTY = 'hideWhenEmpty';
 // This is the ONE Ridgeline setting that is NOT live: JoplinViewsToolbarButtons exposes create() only
 // — no remove/hide/destroy — so a toolbar button created at startup cannot be torn down at runtime.
 // The value is therefore read once at startup to decide whether to create the button, and a change to
-// it only takes effect after Joplin is restarted. The Tools-menu item and Ctrl+Alt+M are unaffected.
+// it only takes effect after Joplin is restarted. The Tools → Ridgeline submenu entry and Ctrl+Alt+M
+// are unaffected.
 export const SETTING_SHOW_TOOLBAR_BUTTON = 'showToolbarButton';
 // Q2: hover-intent dwell (ms) before the TOC opens. Stored as a setting so the user can tune it; the
 // coordinator folds the resolved value into the tokens it ships to both content scripts.

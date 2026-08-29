@@ -97,7 +97,8 @@ async function registerSettings(): Promise<void> {
 			label: 'Show minimap',
 			description:
 				'Show the Ridgeline strip in the editor and viewer. Turn off to hide it everywhere without ' +
-				'disabling the plugin (Tools → Ridgeline: Toggle minimap, or Ctrl+Alt+M). Applies live.',
+				'disabling the plugin (Tools → Ridgeline → Ridgeline: Toggle minimap, or Ctrl+Alt+M). ' +
+				'Applies live.',
 			storage: SettingStorage.File,
 		},
 		[SETTING_HIDE_WHEN_EMPTY]: {
@@ -125,8 +126,8 @@ async function registerSettings(): Promise<void> {
 			description:
 				'Show the note-toolbar button (the fa-stream icon) that toggles the minimap. Takes effect ' +
 				'only after restarting Joplin — unlike every other Ridgeline setting, this one is not live, ' +
-				'because the plugin API cannot remove a toolbar button once it has been created. The Tools ' +
-				'menu item and Ctrl+Alt+M keep working regardless.',
+				'because the plugin API cannot remove a toolbar button once it has been created. The ' +
+				'Tools → Ridgeline menu entry and Ctrl+Alt+M keep working regardless.',
 			storage: SettingStorage.File,
 		},
 		[SETTING_HOVER_OPEN_DELAY]: {
@@ -277,9 +278,9 @@ joplin.plugins.register({
 			}
 		});
 
-		// A convenience command (menu item + accelerator) that flips the strip side. Handy for the
-		// user and exercised by the live-settings E2E, since changing the setting triggers onChange
-		// above and both surfaces update without a relaunch.
+		// A convenience command (Tools → Ridgeline submenu + accelerator) that flips the strip side.
+		// Handy for the user and exercised by the live-settings E2E, since changing the setting triggers
+		// onChange above and both surfaces update without a relaunch.
 		await joplin.commands.register({
 			name: TOGGLE_SIDE_COMMAND,
 			label: 'Ridgeline: Toggle strip side (left/right)',
@@ -288,17 +289,12 @@ joplin.plugins.register({
 				await joplin.settings.setValue(SETTING_SIDE, current === 'right' ? 'left' : 'right');
 			},
 		});
-		await joplin.views.menuItems.create(
-			'ridgeline.toggleSide.menu',
-			TOGGLE_SIDE_COMMAND,
-			MenuItemLocation.Tools,
-			{ accelerator: 'Ctrl+Alt+R' },
-		);
 
 		// Z2: master visibility toggle. Flips the boolean setting, which fires joplin.settings.onChange
 		// above → both surfaces mount/unmount the strip live (editor pushed, viewer polled), in every
-		// window. Reachable three ways, all flipping the same setting: Tools menu, Ctrl+Alt+M, and a
-		// note-toolbar button (fa-stream, a stack of staggered lines that reads as the minimap).
+		// window. Reachable three ways, all flipping the same setting: the Tools → Ridgeline submenu,
+		// Ctrl+Alt+M, and a note-toolbar button (fa-stream, a stack of staggered lines that reads as the
+		// minimap).
 		await joplin.commands.register({
 			name: TOGGLE_MINIMAP_COMMAND,
 			label: 'Ridgeline: Toggle minimap',
@@ -308,22 +304,17 @@ joplin.plugins.register({
 				await joplin.settings.setValue(SETTING_SHOW_MINIMAP, current === false);
 			},
 		});
-		await joplin.views.menuItems.create(
-			'ridgeline.toggleMinimap.menu',
-			TOGGLE_MINIMAP_COMMAND,
-			MenuItemLocation.Tools,
-			{ accelerator: 'Ctrl+Alt+M' },
-		);
 		// The same command as a note-toolbar button so the toggle is a single click away, not buried in
-		// the Tools menu. Note toolbar = desktop-only, present whenever a note is open. The button's
-		// hover title is the command label ("Ridgeline: Toggle minimap"); the E2E locates it by that.
+		// the Tools → Ridgeline submenu. Note toolbar = desktop-only, present whenever a note is open. The
+		// button's hover title is the command label ("Ridgeline: Toggle minimap"); the E2E locates it by
+		// that, so this label must not be shortened.
 		//
 		// Gated behind SETTING_SHOW_TOOLBAR_BUTTON, read once here at startup. This is the ONE Ridgeline
 		// setting that is NOT live: JoplinViewsToolbarButtons exposes create() only (no remove/hide/
 		// destroy — confirmed in api/JoplinViewsToolbarButtons.d.ts), so a button created here cannot be
 		// torn down at runtime. A change to the setting therefore only takes effect on the next Joplin
-		// restart. The Tools-menu item and Ctrl+Alt+M above are registered unconditionally and are
-		// unaffected either way.
+		// restart. The Tools → Ridgeline submenu entry and Ctrl+Alt+M are registered unconditionally and
+		// are unaffected either way.
 		const showToolbarButton = (await joplin.settings.value(SETTING_SHOW_TOOLBAR_BUTTON)) !== false;
 		if (showToolbarButton) {
 			await joplin.views.toolbarButtons.create(
@@ -344,11 +335,32 @@ joplin.plugins.register({
 				await joplin.settings.setValue(SETTING_HIDE_WHEN_EMPTY, current === false);
 			},
 		});
-		await joplin.views.menuItems.create(
-			'ridgeline.toggleHideWhenEmpty.menu',
-			TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
+		// One "Ridgeline" submenu under Tools holding all three toggles, instead of three top-level Tools
+		// items. Created here, after the last commands.register, because the leaves are resolved through
+		// CommandService when the menu bar builds, so all three commands are registered first.
+		//
+		// The entries render with their FULL command labels ("Ridgeline: Toggle minimap", …), so the menu
+		// reads Tools → Ridgeline → Ridgeline: Toggle minimap. A per-item `label` cannot shorten them,
+		// despite what MenuItem.label in api/types.ts suggests ("if not specified, the command label will
+		// be used instead"): that doc holds for MenuItem as other APIs consume it, not for the leaves of
+		// views.menus.create. In Joplin 3.7.6 (the build the e2e pins) MenuBar's createPluginMenuTree
+		// reads menuItem.label ONLY on items that themselves carry a `submenu`, and sends every leaf
+		// through MenuUtils.commandToMenuItem(commandName, onClick), which hard-codes
+		// `label: this.service.label(commandName)` — the registered command label. A `label` here would be
+		// silently discarded, so none is passed.
+		//
+		// `accelerator` IS honoured: JoplinViewsMenus.create walks these items and feeds each one to
+		// KeymapService.registerCommandAccelerator(commandName, accelerator), which commandToMenuItem then
+		// reads back. The shortcuts below are live, and the grouping under one parent is the real win.
+		await joplin.views.menus.create(
+			'ridgeline.menu',
+			'Ridgeline',
+			[
+				{ commandName: TOGGLE_SIDE_COMMAND, accelerator: 'Ctrl+Alt+R' },
+				{ commandName: TOGGLE_MINIMAP_COMMAND, accelerator: 'Ctrl+Alt+M' },
+				{ commandName: TOGGLE_HIDE_WHEN_EMPTY_COMMAND, accelerator: 'Ctrl+Alt+H' },
+			],
 			MenuItemLocation.Tools,
-			{ accelerator: 'Ctrl+Alt+H' },
 		);
 
 		console.info(`[ridgeline] ${PLUGIN_ID} started`);
