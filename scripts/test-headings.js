@@ -8,9 +8,11 @@
 // invisible to every other check in this repo, and it is why this file exists.
 //
 // The expectations are not invented: every row was measured against Joplin 3.7.6's real renderer
-// bundle (markdown-it + markdown-it-anchor + @joplin/fork-uslug), and the rows that CHANGE an anchor
-// versus the old regex-based `cleanForSlug` carry a `was:` comment naming the old, broken value — so
-// the fourteen intentional moves read as a reviewed diff rather than as drift.
+// bundle (markdown-it + markdown-it-anchor + @joplin/fork-uslug), and EVERY row that changes an anchor
+// versus the old regex-based `cleanForSlug` carries a `was:` comment naming the old, broken value — so
+// the intentional moves read as a reviewed diff rather than as drift. (No count is quoted here on
+// purpose: one was, it went stale the moment a row was added, and a stale count reads as a promise the
+// file is not keeping.)
 //
 // RULE FOR CONTRIBUTORS: a new heading construct gets a MATRIX row before it gets code.
 //
@@ -85,6 +87,18 @@ const MATRIX = [
 	{ id: 'image-only', raw: '# ![alt text](https://e.example.com/i.png)', level: 1, line: 0, display: 'alt text', anchor: '' },
 	// The alt must propagate OUT of the recursive link-label scan. was: alt-text
 	{ id: 'image-in-link', raw: '# [![alt text](https://e.example.com/i.png)](' + NOTE + ')', level: 1, line: 0, display: 'alt text', anchor: '' },
+	// A construct that emits NO text must still break the delimiter run around it, or the `**` before it
+	// and the `**` after it merge into one run of four, the length gate skips it, and the markers reach
+	// the bar label ("**** tail") while the viewer shows "tail". was: alt-tail
+	{ id: 'image-in-emphasis', raw: '# **![alt](https://e.example.com/i.png)** tail', level: 1, line: 0, display: 'tail', anchor: 'tail' },
+	// The same defect with '~', which uslug KEEPS, so it moved the ANCHOR too (we produced `~~~~-tail`).
+	// was: ~~alt~~-tail
+	{ id: 'image-in-strike', raw: '# ~~![alt](https://e.example.com/i.png)~~ tail', level: 1, line: 0, display: 'tail', anchor: 'tail' },
+	// The alt fallback must be judged AFTER the emphasis strip, or this bar is labelled "****".
+	// was: banner
+	{ id: 'image-only-in-emphasis', raw: '# **![banner](https://e.example.com/i.png)**', level: 1, line: 0, display: 'banner', anchor: '' },
+	// An empty link LABEL emits nothing either, so it needs the same run break.
+	{ id: 'empty-link-in-emphasis', raw: '# **[](https://e.example.com)** tail', level: 1, line: 0, display: 'tail', anchor: 'tail' },
 
 	// --- code spans are opaque to everything --------------------------------
 	{ id: 'inline-code', raw: '# The `parseHeadings()` function', level: 1, line: 0, display: 'The parseHeadings() function', anchor: 'the-parseheadings-function' },
@@ -107,9 +121,30 @@ const MATRIX = [
 	// html_inline is excluded from the id; the text BETWEEN two tags is not. was: a-bxb-word
 	{ id: 'inline-html', raw: '# A <b>x</b> word', level: 1, line: 0, display: 'A x word', anchor: 'a-x-word' },
 	// Joplin's own textContent keeps a DOUBLE space here ("a  b"); both our surfaces collapse it.
+	// was: a-c-b
 	{ id: 'html-comment', raw: '# a <!-- c --> b', level: 1, line: 0, display: 'a b', anchor: 'a-b' },
+	// CommonMark's comment production is NARROWER than "anything between <!-- and -->": a body
+	// containing '--' is not a comment at all, so Joplin renders the whole thing literally. Accepting it
+	// moved both surfaces away from the renderer on a construct main got right by accident.
+	{ id: 'html-comment-malformed', raw: '# a <!-- a--b --> c', level: 1, line: 0, display: 'a <!-- a--b --> c', anchor: 'a-a-b-c' },
 	// text_special becomes the text "&", which uslug then deletes. was: tom-amp-jerry
 	{ id: 'entity-amp', raw: '# Tom &amp; Jerry', level: 1, line: 0, display: 'Tom & Jerry', anchor: 'tom-jerry' },
+	// A named entity we DO decode. uslug deletes the em dash but would have kept the letters "mdash",
+	// so the miss was a dead jump, not just a display string showing its source.
+	// was: design-mdash-a-note
+	{ id: 'entity-mdash', raw: '# Design &mdash; a note', level: 1, line: 0, display: 'Design \u2014 a note', anchor: 'design-a-note' },
+	// PINNED KNOWN-WRONG, the way `ref-link-defined` is: a named entity outside our table stays literal,
+	// and its NAME survives into the anchor. Joplin renders "a \u00bd b" with id "a-12-b". Widening
+	// ENTITIES in src/inlineText.ts is the fix; this row exists so the gap cannot be forgotten, and so a
+	// half-done widening fails loudly here instead of drifting.
+	{ id: 'entity-unlisted-named', raw: '# a &frac12; b', level: 1, line: 0, display: 'a &frac12; b', anchor: 'a-frac12-b' },
+	// String.fromCodePoint THROWS above U+10FFFF; the catch in renderInline would then degrade the WHOLE
+	// heading back to raw Markdown — issue #1, resurrected by one bad entity. markdown-it substitutes
+	// U+FFFD. was: a-9999999-b
+	{ id: 'entity-out-of-range', raw: '# a &#9999999; b', level: 1, line: 0, display: 'a \ufffd b', anchor: 'a-b' },
+	// A lone surrogate does not throw but is not text either; markdown-it rejects it the same way.
+	// was: a-xd800-b
+	{ id: 'entity-surrogate', raw: '# a &#xD800; b', level: 1, line: 0, display: 'a \ufffd b', anchor: 'a-b' },
 	{ id: 'escape-bracket', raw: '# A \\[not a link\\] here', level: 1, line: 0, display: 'A [not a link] here', anchor: 'a-not-a-link-here' },
 	// Unescaped characters must be MASKED from the emphasis pass or these asterisks pair up and vanish.
 	{ id: 'escape-star', raw: '# Literal \\*stars\\* here', level: 1, line: 0, display: 'Literal *stars* here', anchor: 'literal-stars-here' },
@@ -130,9 +165,23 @@ const MATRIX = [
 	// better than Joplin's own textContent ("Solve x^2x2x^2x2 now" — hidden source + MathML annotation
 	// + katex-html all concatenate); viewer.js has a matching walker. was: solve-x2-now
 	{ id: 'math-inline', raw: '# Solve $x^2$ now', level: 1, line: 0, display: 'Solve x^2 now', anchor: 'solve-now' },
+	// `$$…$$` inside a heading is NOT display math: katex's inline rule sees an empty span between the
+	// first two dollars and emits them literally, and its block rule needs `$$` alone on a line. So the
+	// delimiters are visible text and DO reach the id. Treating them as math moved the anchor away from
+	// Joplin — the one direction this change promised never to move.
+	{ id: 'math-display-dollars', raw: '# a $$x^2$$ b', level: 1, line: 0, display: 'a $$x^2$$ b', anchor: 'a-x2-b' },
 	// footnote_ref is excluded from the id; the marker is dropped from the display on BOTH surfaces
 	// (Joplin's textContent leaks a bare "[1]"). Needs the definition in the body. was: claim1-here
 	{ id: 'footnote-ref', raw: '# Claim[^1] here\n\n[^1]: the footnote', level: 1, line: 0, display: 'Claim here', anchor: 'claim-here' },
+	// WITHOUT the definition the marker is not a footnote at all: markdown-it-footnote's ref rule bails
+	// on an unknown label, so Joplin renders `[^1]` literally and its id keeps the "1". Dropping it
+	// unconditionally moved the anchor away from Joplin AND made the two strips disagree, since the
+	// viewer can only skip a real `sup.footnote-ref` element. This is the row the defined case above
+	// cannot see.
+	{ id: 'footnote-ref-undefined', raw: '# Claim[^1] here', level: 1, line: 0, display: 'Claim[^1] here', anchor: 'claim1-here' },
+	// The same shape with nothing to do with footnotes: `[^…]` is also a regex negated character class,
+	// which is how this reaches an ordinary developer note.
+	{ id: 'footnote-negated-class', raw: '# Use [^0-9] to match', level: 1, line: 0, display: 'Use [^0-9] to match', anchor: 'use-0-9-to-match' },
 
 	// --- false-positive guards: nothing here is a link ----------------------
 	{ id: 'task-list-like', raw: '# [ ] Not a task', level: 1, line: 0, display: '[ ] Not a task', anchor: 'not-a-task' },
@@ -155,6 +204,14 @@ const MATRIX = [
 	{ id: 'double-equals', raw: '# x == y == z', level: 1, line: 0, display: 'x == y == z', anchor: 'x-y-z' },
 	// A single '~' is a path, not a strikethrough delimiter — and uslug keeps it.
 	{ id: 'tilde-path', raw: '# path ~/a and ~/b', level: 1, line: 0, display: 'path ~/a and ~/b', anchor: 'path-~a-and-~b' },
+	// markdown-it splits a LONGER run: the odd delimiter is emitted as literal text and the rest nest.
+	// Treating a 3-run as literal left `~~~` in the id, because uslug keeps '~'.
+	// was: a-~~~b~~~-c
+	{ id: 'strike-triple-tilde', raw: '# a ~~~b~~~ c', level: 1, line: 0, display: 'a ~b~ c', anchor: 'a-~b~-c' },
+	// An even run nests completely and leaves nothing behind. was: a-~~~~b~~~~-c
+	{ id: 'strike-quad-tilde', raw: '# a ~~~~b~~~~ c', level: 1, line: 0, display: 'a b c', anchor: 'a-b-c' },
+	// The '=' equivalent is display-only, because uslug deletes '='.
+	{ id: 'mark-triple-equals', raw: '# a ===b=== c', level: 1, line: 0, display: 'a =b= c', anchor: 'a-b-c' },
 
 	// --- setext is a SEPARATE code path -------------------------------------
 	{ id: 'setext-h1-note-link', raw: '[Note title](' + NOTE + ')\n===', level: 1, line: 0, display: 'Note title', anchor: 'note-title' },
@@ -162,6 +219,20 @@ const MATRIX = [
 	// The same ordering bug as code-wrapping-link, proving the defect lived in the inline layer rather
 	// than in the ATX branch. was: use-x-now
 	{ id: 'setext-h1-code-link', raw: 'Use `[x](y)` now\n===', level: 1, line: 0, display: 'Use [x](y) now', anchor: 'use-xy-now' },
+
+	// --- past the 1024-character circuit breaker ----------------------------
+	// Over MAX_INLINE_LEN the scan is skipped, so the DISPLAY stays raw — issue #1 is not fixed up here,
+	// deliberately, and never was. The ANCHOR is a different matter: handing raw Markdown to uslug folds
+	// the link destination (a note id's 32 hex characters) into the id, which the regexes this module
+	// replaced never did. The fallback therefore unwraps links and drops backticks before slugging.
+	{
+		id: 'over-length-with-link',
+		raw: '# ' + 'y'.repeat(1000) + ' [T](' + NOTE + ')',
+		level: 1,
+		line: 0,
+		display: 'y'.repeat(1000) + ' [T](' + NOTE + ')',
+		anchor: 'y'.repeat(1000) + '-t',
+	},
 ];
 
 // A body whose fenced block contains a line that looks like a heading: it must contribute NO heading
@@ -237,6 +308,12 @@ const IDENTITY = [
 // regex-based rewrite that reintroduces catastrophic backtracking on a path that runs from the
 // CodeMirror updateListener on EVERY keystroke.
 //
+// TWO of these inputs are longer than MAX_INLINE_LEN and so return from the S0 guard without entering
+// the scanner at all: their timings measure the early return, not the scan, and their names say so.
+// They are kept because they pin the circuit breaker itself — raise or delete MAX_INLINE_LEN and their
+// budget becomes live — but the scanner stress lives in their under-cap siblings above them. (A
+// near-cap input also needs a TRIGGER character, or the second S0 guard returns just as early.)
+//
 // The 50 ms budget is applied to `renderInline` — the scanner this repo owns and the thing the budget
 // exists to police. It deliberately is NOT applied to `parseHeadings`, because that also calls uslug,
 // which on these inputs costs 11-46 ms all by itself and swamps the signal: measured, `'*' x 2000`
@@ -257,7 +334,9 @@ const PATHOLOGY_PIPELINE_CEILING_MS = 500;
 const PATHOLOGY = [
 	{ name: '600 open brackets', body: '# ' + '['.repeat(600) },
 	{ name: '400 image openers', body: '# ' + '!['.repeat(400) },
-	{ name: '2000 asterisks', body: '# ' + '*'.repeat(2000) },
+	{ name: '1000 asterisks', body: '# ' + '*'.repeat(1000) },
+	{ name: '170 link openers (1020 chars)', body: '# ' + '[x](u)'.repeat(170) },
+	{ name: '2000 asterisks (over MAX_INLINE_LEN — times the S0 guard, not the scanner)', body: '# ' + '*'.repeat(2000) },
 	{ name: '500 backticks', body: '# ' + '`'.repeat(500) },
 	{ name: '600 close brackets', body: '# ' + ']'.repeat(600) },
 	{ name: '900 tildes', body: '# ' + '~'.repeat(900) },
@@ -266,7 +345,7 @@ const PATHOLOGY = [
 	{ name: '600 angle brackets', body: '# ' + '<'.repeat(600) },
 	{ name: '600 dollar signs', body: '# ' + '$'.repeat(600) },
 	{ name: '50 nested link openers', body: '# ' + '['.repeat(50) + 'x' + ']('.repeat(50) + 'u' + ')'.repeat(50) },
-	{ name: '5000-char heading', body: '# ' + 'a b '.repeat(1250) },
+	{ name: '5000-char heading (over MAX_INLINE_LEN — times the S0 guard, not the scanner)', body: '# ' + 'a b '.repeat(1250) },
 ];
 
 // ---------------------------------------------------------------------------
@@ -431,6 +510,23 @@ function main() {
 			`src/contentScripts/viewer.js no longer contains ${NORMALISER}. It MUST stay byte-identical ` +
 				'to collapse() in src/inlineText.ts, or the editor and viewer strips will label the same ' +
 				'heading differently.',
+		);
+	});
+	// The literal above also appears in viewer.js's banner COMMENT, so on its own it is satisfied by
+	// prose: delete the whole walker and leave the comment behind and the check above still passes.
+	// These two pin the CODE — the helper and the one call site that uses it.
+	drift.check('viewer.js still defines and calls headingDisplayText', () => {
+		const source = fs.readFileSync(VIEWER, 'utf8');
+		assert.ok(
+			source.includes('function headingDisplayText('),
+			'src/contentScripts/viewer.js no longer defines headingDisplayText(). The viewer would fall ' +
+				'back to raw textContent, which leaks the KaTeX source and a bare footnote marker into ' +
+				'the bar label and breaks editor↔viewer parity.',
+		);
+		assert.ok(
+			source.includes('var text = headingDisplayText(h);'),
+			'src/contentScripts/viewer.js no longer CALLS headingDisplayText(h) when building a bar. A ' +
+				'dead helper passes every source-text check while the viewer silently reverts.',
 		);
 	});
 	drift.check('collapse() is that same rule', () => {
