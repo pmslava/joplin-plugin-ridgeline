@@ -169,6 +169,10 @@ test.describe('Ridgeline round-1 fixes (R1–R7)', () => {
       expect(r.textOverflow, `row "${r.text}" text-overflow`).toBe('ellipsis');
     }
     // The long heading really overflows its row, so the ellipsis is actually engaged (clipped content).
+    // NB this needs a row that genuinely overflows the panel. LONG_HEADING is 124 characters of pure
+    // prose, which the display-text resolution (issue #1) passes through byte-identical. A future
+    // fixture whose length came from link URLs would render SHORT and silently stop overflowing, so
+    // this assertion would pass vacuously — keep the long row plain.
     const longRow = rows.find((r) => r.text.startsWith('A very long heading'));
     expect(longRow, 'long heading row present').toBeTruthy();
     expect(longRow!.scrollWidth - longRow!.clientWidth, 'long row content is clipped').toBeGreaterThan(1);

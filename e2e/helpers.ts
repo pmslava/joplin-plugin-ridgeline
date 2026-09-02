@@ -209,6 +209,11 @@ export async function editorScrollTop(win: Page): Promise<number> {
 
 // The current heading is now shown by the bold/white current BAR (no text label in the compact
 // state). Its heading text is carried on the bar's data-text attribute for observability.
+//
+// data-text is DISPLAY text: the heading as a reader sees it (`## See [Alpha](:/…) here` → "See Alpha
+// here"), not the raw Markdown — see EditorHeading.text in src/headings.ts. The editor and the viewer
+// derive it by completely different means and are guaranteed to produce the same string, so
+// editorCurrentHeading() and viewerCurrentHeading() below are directly comparable to each other.
 export async function editorCurrentHeading(win: Page): Promise<string> {
   return (
     (await win
@@ -247,6 +252,9 @@ export function viewerFrame(win: Page): FrameLocator {
   return win.frameLocator(VIEWER_IFRAME);
 }
 
+// Same display-text contract as editorCurrentHeading above: the viewer resolves the RENDERED DOM
+// (src/contentScripts/viewer.js headingDisplayText) where the editor resolves the raw Markdown, and
+// the two are asserted equal end-to-end by e2e/heading-links.spec.ts.
 export async function viewerCurrentHeading(win: Page): Promise<string> {
   const frame = viewerFrameOrNull(win);
   if (!frame) return '';
