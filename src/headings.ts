@@ -218,6 +218,10 @@ export function parseHeadings(body: string): EditorHeading[] {
 	// opening a paragraph, because its container swallows the following line the same way.
 	let paragraphOpen = false;
 
+	// The line the scan last CONSUMED as a definition of either kind, or -1. Armed by the two branches
+	// below and read by the setext branch at the bottom of the loop.
+	let definitionLine = -1;
+
 	for (let index = 0; index < lines.length; index++) {
 		const rawLine = lines[index];
 
@@ -289,6 +293,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 				footnotes.add(footnoteDef[1]);
 				// A footnote definition opens a container whose first paragraph swallows the next line.
 				paragraphOpen = true;
+				definitionLine = index;
 				continue;
 			}
 			if (!paragraphOpen) {
@@ -297,7 +302,13 @@ export function parseHeadings(body: string): EditorHeading[] {
 					const key = normalizeReference(label);
 					// markdown-it rejects an empty normalised label outright (`[]:`, `[ ]:`), and the FIRST
 					// definition of a label wins — a Set gives us both, since we never store a destination.
-					if (key !== '') references.add(key);
+					// The rejected line stays ordinary paragraph text, and a `===` under it therefore IS a
+					// heading (`[]: https://example.com\n===` renders <h1 id="httpsexamplecom">; measured),
+					// so the setext guard below is armed only when the label survives.
+					if (key !== '') {
+						references.add(key);
+						definitionLine = index;
+					}
 					continue;
 				}
 			}
@@ -313,6 +324,20 @@ export function parseHeadings(body: string): EditorHeading[] {
 		// as a heading: the underline must be a run of only = or -, the text line must be a plain
 		// paragraph line (non-blank, not ATX, not a list/blockquote/table/fence marker), and the line
 		// ABOVE the text line must be blank or the start of the document (a heading stands alone).
+		//
+		// The fourth guard is the one line the scan already ATE. `reference` and `footnote_def` are BLOCK
+		// rules that run before the paragraph/setext logic ever sees the line, so a definition directly
+		// under an underline leaves no paragraph for the underline to underline. Measured against Joplin
+		// 3.7.6 — every one of these renders NO heading at all:
+		//     "[ref]: https://example.com\n==="  → <p>===</p>
+		//     "[ref]: https://example.com\n---"  → <hr>
+		//     "[^1]: the note\n==="              → nothing (an unreferenced footnote renders nothing)
+		//     "[^1]: the note\n---"              → <hr>
+		// We used to emit a phantom heading there ("ref: https://example.com", slug `ref-httpsexamplecom`)
+		// — an extra bar in the strip whose click landed on nothing, because no rendered element carries
+		// that id. Reading the scan's own verdict instead of re-testing the text line is deliberate: the
+		// reference branch is gated on `paragraphOpen`, so a second, context-free test could disagree with
+		// the scan about the very same line, and it would cost a re-scan on the keystroke hot path.
 		const underline = rawLine.match(/^\s{0,3}(=+|-+)\s*$/);
 		if (underline) paragraphOpen = false;
 		if (underline && index > 0) {
@@ -320,7 +345,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 			const textLine = textLineRaw.trim();
 			const aboveBlank = index - 2 < 0 || lines[index - 2].trim() === '';
 			const looksLikeBlock = /^(#|>|\||[-*+]\s|\d+[.)]\s)/.test(textLine);
-			if (textLine !== '' && !looksLikeBlock && aboveBlank) {
+			if (textLine !== '' && !looksLikeBlock && aboveBlank && index - 1 !== definitionLine) {
 				const level = underline[1][0] === '=' ? 1 : 2;
 				// Setext is a genuinely separate code path from ATX, so it resolves its inline content the
 				// same way — an ATX-only fix leaves `[Note title](:/…)\n===` raw in the strip and leaves
