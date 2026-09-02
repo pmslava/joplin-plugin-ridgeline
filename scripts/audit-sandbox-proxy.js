@@ -13,9 +13,10 @@
 // capture (`const s = joplin.settings`) is rejected even though the proxy nominally tolerates one,
 // because the moment such a capture is read a second time the shared path is wrong again.
 //
-// Ridgeline has no unit-harness layer, so this runs as its own fast static check — `npm run
-// test:sandbox-proxy` locally, and a step in the CI build gate the publish flow depends on. It reads
-// source only; nothing has to be built first.
+// Ridgeline's only unit-level harness is the heading display/slug matrix (`npm run test:headings`),
+// so this runs as its own fast STATIC check instead — `npm run test:sandbox-proxy` locally, and a step
+// in the CI build gate the publish flow depends on. It reads source only; nothing has to be built
+// first.
 
 /* eslint-disable no-console */
 

@@ -42,7 +42,7 @@ build gate the publish flow depends on.
 
 `npm run test:headings` (`scripts/test-headings.js`) compiles `src/inlineText.ts` + `src/headings.ts`
 straight from source with the repo's own TypeScript — never from `dist/`, which can be stale, and into
-which `headings.ts` is bundled *twice* — and runs 61 measured cases plus four supporting blocks.
+which `headings.ts` is bundled *twice* — and runs every measured case plus four supporting blocks.
 
 The contract it defends is this: for a given heading line, the strip must show **the text a reader
 sees** in the rendered note, and must compute an anchor **byte-identical to the id Joplin's renderer
@@ -148,8 +148,11 @@ touches your real Joplin profile.
 - `src/` — the plugin source.
   - `index.ts` — plugin entry point: registers settings, commands, and the coordinator.
   - `headings.ts` — the editor-side heading parser: a line scan for BLOCK structure (fences, HTML
-    comment blocks, ATX indent limits, setext underlines) plus the slug and its duplicate suffix. It is
-    **not** shared with the viewer — `viewer.js` reads the rendered DOM and cannot import TypeScript.
+    comment blocks, ATX indent limits, setext underlines) plus the slug and its duplicate suffix. That
+    scan also collects the note's `[^label]:` footnote definitions, because a `[^1]` in a heading is a
+    footnote only if a definition exists somewhere in the body — so the headings are resolved in a
+    second phase, after the whole body has been walked. It is **not** shared with the viewer —
+    `viewer.js` reads the rendered DOM and cannot import TypeScript.
   - `inlineText.ts` — resolves a heading's inline Markdown into the text a reader sees plus the token
     stream Joplin slugifies; the single source for both the label the strip shows and the anchor it
     jumps to. Pure, dependency-free, and pinned by `npm run test:headings`.

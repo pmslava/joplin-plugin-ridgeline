@@ -69,11 +69,14 @@ the build (and therefore the publish) will fail loudly.
 Prove these **in this order** before cutting a release. Do not skip ahead — the point is that the exact
 commit you release has already passed every gate.
 
-1. **Local fast gate (the harness) — green.** Ridgeline has no unit-harness layer, so the "harness" is
-   the fast type-check-and-build plus the four-place version check:
+1. **Local fast gate (the harness) — green.** Ridgeline's only unit-level harness is the heading
+   display/slug matrix; everything else is a static check plus the type-check-and-build and the
+   four-place version check. Run all four, in this order:
 
    ```
+   npm run test:sandbox-proxy
    npx tsc --noEmit
+   npm run test:headings
    npm run dist          # must emit publish/io.github.pmslava.ridgeline.jpl
    ```
 
@@ -149,9 +152,13 @@ authoritative and immediate.)
 ## What the two workflows do, and why E2E is not in the publish gate
 
 - **`.github/workflows/tests.yml`** runs on every push and pull request. It has two jobs:
-  - **build** — the *fast gate*: `npm ci`, the **four-place version check**, `tsc --noEmit`,
-    `npm run dist`, and a check that the `.jpl` was actually produced. Ridgeline has no unit-harness
-    layer, so this type-check-and-build (plus the version check) **is** the fast gate.
+  - **build** — the *fast gate*: `npm ci`, the **four-place version check**,
+    `npm run test:sandbox-proxy`, `tsc --noEmit`, `npm run test:headings`, `npm run dist`, and a check
+    that the `.jpl` was actually produced. Ridgeline's only unit-level harness is that heading matrix;
+    the rest of the gate is static checks plus the type-check-and-build.
+
+    Gate 1 above runs the same four commands locally, so a red matrix is a one-second local failure
+    rather than a CI round trip.
   - **e2e** — the *real-app suite*: launches the actual Joplin desktop (Electron) under Xvfb with the
     plugin loaded and drives it with Playwright. It caches the Joplin AppImage keyed on
     `JOPLIN_E2E_VERSION` and uploads its report/traces on failure.

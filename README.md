@@ -21,7 +21,7 @@ Ridgeline draws a compact stack of thin bars down the edge of your note — one 
 - **Compact level-encoded minimap.** One thin bar per heading; the bar length encodes the heading level (H1 longest … H6 shortest), so the note's structure reads at a glance from a sliver of edge space.
 - **Live current-section tracking.** The bar for the section at the top of the viewport is brightened and thickened and follows your scrolling in real time.
 - **Hover-intent table of contents.** Let the pointer rest on the bars (a short dwell, so a mouse merely crossing the strip never pops it open) and the stack expands into a full clickable outline, indented by level, with the current heading highlighted. Click a bar or a row to jump.
-- **Headings read the way the note reads.** Rows show each heading as the rendered note shows it, not as raw Markdown: a note or web link reads as its link text, and inline code, emphasis, escapes and entities are rendered rather than printed.
+- **Headings read the way the note reads.** Rows show each heading as the rendered note shows it, not as raw Markdown: a note or web link reads as its link text, and inline code, emphasis, escapes and the common HTML entities are rendered rather than printed.
 - **Editor and viewer, in step.** The strip is drawn in both the raw Markdown editor and the rendered note viewer, down to the heading text itself — both panes show the identical string — and a jump from either pane moves both.
 - **Overlay or reserve.** Draw the strip over the text, or reserve a thin margin so it never overlaps a word — set independently for the editor and the viewer.
 - **Left or right, your call.** Park the strip on either edge of the pane.
