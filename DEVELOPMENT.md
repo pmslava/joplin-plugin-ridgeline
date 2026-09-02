@@ -57,7 +57,8 @@ Every expectation was measured against Joplin 3.7.6's real renderer (markdown-it
 must be parsed together because they share the duplicate-suffix counter or a `[label]:` definition,
 and the rows whose body carries that definition with them), IDENTITY (every heading
 string the E2E suite asserts on, proven to pass through byte-identical), STRUCTURE (fences, HTML
-comments, indent limits, setext guards and line numbers), PATHOLOGY (adversarial inputs under a 50 ms
+comments, indent limits, setext guards — including the definition lines a block rule eats before the
+setext logic sees them — and line numbers), PATHOLOGY (adversarial inputs under a 50 ms
 budget, there to fail a future regex rewrite that reintroduces backtracking on the per-keystroke path),
 and VIEWER DRIFT GUARD.
 

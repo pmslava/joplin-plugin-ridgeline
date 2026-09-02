@@ -559,7 +559,8 @@ function main() {
 
 	// --- 3. STRUCTURE -------------------------------------------------------
 	// The block layer must be exactly as it was: the inline change is not allowed to move a line
-	// number, resurrect a fenced fake heading, or loosen a setext guard.
+	// number, resurrect a fenced fake heading, or loosen a setext guard — including the guard that
+	// keeps a link reference or footnote definition under an underline from becoming a phantom bar.
 	const structure = block('STRUCTURE');
 	structure.check('backtick fence hides a heading', () => {
 		assert.deepEqual(parseHeadings('```\n# Hidden\n```\n# Shown').map((h) => h.text), ['Shown']);
@@ -593,6 +594,38 @@ function main() {
 	});
 	structure.check('a list/blockquote line above an underline is not a setext heading', () => {
 		assert.deepEqual(parseHeadings('> quoted\n---').map((h) => h.text), []);
+	});
+	// A DEFINITION line under an underline. `reference` and `footnote_def` are block rules that eat the
+	// line before the paragraph/setext logic ever sees it, so there is no paragraph left to underline.
+	// All four were measured against Joplin 3.7.6 and render no heading at all (`===` survives as a
+	// literal <p>, `---` becomes an <hr>, and an unreferenced footnote renders nothing). Before the
+	// guard we emitted a phantom H1 'ref: https://example.com' — an extra bar whose click went nowhere,
+	// because no rendered element carries the id it slugged to.
+	structure.check('a link reference definition above === is not a setext heading', () => {
+		assert.deepEqual(parseHeadings('[ref]: https://example.com\n==='), []);
+	});
+	structure.check('a link reference definition above --- is not a setext heading', () => {
+		assert.deepEqual(parseHeadings('[ref]: https://example.com\n---'), []);
+	});
+	structure.check('a footnote definition above === is not a setext heading', () => {
+		assert.deepEqual(parseHeadings('[^1]: the note\n==='), []);
+	});
+	// The controls. Without them the guard above is satisfied by deleting the setext branch outright.
+	structure.check('a plain text line above === IS a setext heading', () => {
+		assert.deepEqual(parseHeadings('Text\n==='), [{ level: 1, text: 'Text', line: 0, slug: 'text' }]);
+	});
+	structure.check('a definition, a blank line, then a setext heading still IS one', () => {
+		assert.deepEqual(parseHeadings('[ref]: https://example.com\n\nText\n==='), [
+			{ level: 1, text: 'Text', line: 2, slug: 'text' },
+		]);
+	});
+	// The guard reads the scan's own verdict, so it must NOT fire on a line the scan rejected: an empty
+	// normalised label is not a definition for markdown-it either, and `[]: https://example.com\n===`
+	// renders <h1 id="httpsexamplecom">[]: https://example.com</h1>. Measured.
+	structure.check('an empty-label definition is paragraph text, and === still heads it', () => {
+		assert.deepEqual(parseHeadings('[]: https://example.com\n==='), [
+			{ level: 1, text: '[]: https://example.com', line: 0, slug: 'httpsexamplecom' },
+		]);
 	});
 	structure.check('an empty heading produces no bar', () => {
 		assert.deepEqual(parseHeadings('#\n#   ').map((h) => h.text), []);
