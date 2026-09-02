@@ -263,6 +263,79 @@ function matchDestination(src: string, open: number): number {
 	return -1;
 }
 
+// --- link reference definitions ----------------------------------------------
+
+/**
+ * markdown-it's `normalizeReference` (common/utils.js), transcribed:
+ *
+ *   `str.trim().replace(/\s+/g, ' ')` … `.toLowerCase().toUpperCase()`
+ *
+ * so `[The  Guide]` and `[the guide]:` are the SAME label — measured: `# Read [the  guide]` with a
+ * `[the guide]:` definition renders "Read the  guide" with id `read-the-guide`.
+ *
+ * The double case-fold is not a typo and is not the same as one `toLowerCase()`: it is markdown-it's
+ * way of collapsing characters whose upper- and lower-case forms are not bijective (ﬀ, ς, ı …). It is
+ * transcribed verbatim rather than approximated because it costs nothing to be exact here.
+ *
+ * markdown-it also carries a `'\u1E9E'.toLowerCase() === '\u1E7E'` guard for an ancient engine that
+ * mis-folded capital ẞ; that test is false on every engine this plugin can run on, so the branch it
+ * guards is dead and is omitted.
+ *
+ * The label handed in is the RAW source slice, backslashes intact, on BOTH sides — that is what
+ * markdown-it normalises too (`src.slice(labelStart, labelEnd)` and `str.slice(1, labelEnd)`), so
+ * `# See [a\]b]` and `[a\]b]: …` still match.
+ */
+export function normalizeReference(label: string): string {
+	return label.trim().replace(/\s+/g, ' ').toLowerCase().toUpperCase();
+}
+
+/**
+ * The label a reference link or image looks up, and the index just past the construct — markdown-it's
+ * three forms in one place (`rules_inline/link.js`, the `parseReference` branch):
+ *
+ *   full      `[text][label]`  the second bracket pair IS the label
+ *   collapsed `[text][]`       the second pair is empty, so `if (!label) label = text` fires
+ *   shortcut  `[text]`         there is no second pair, and the same fallback fires
+ *
+ * `textStart` is the first character of the label text (i + 1 for a link, i + 2 for an image) and
+ * `labelEnd` the index just past its `]`. When a second `[` opens but never closes, markdown-it leaves
+ * `pos` at `labelEnd` and treats the construct as a shortcut, so the stray `[` is scanned again — that
+ * is why `end` starts at `labelEnd` and only moves for a complete second pair.
+ *
+ * The second label is matched WITH nesting allowed, as markdown-it does (`parseLinkLabel(state, pos)`
+ * without the disable flag), so `[t][a[b]]` looks up `a[b]` — which no definition can ever carry,
+ * because the definition rule rejects a raw `[` in a label. Measured: that heading stays literal.
+ */
+function referenceAt(src: string, textStart: number, labelEnd: number): { label: string; end: number } {
+	let label = '';
+	let end = labelEnd;
+	if (src[labelEnd] === '[') {
+		const second = matchLabel(src, labelEnd);
+		if (second > 0) {
+			label = src.slice(labelEnd + 1, second - 1);
+			end = second;
+		}
+	}
+	if (!label) label = src.slice(textStart, labelEnd - 1);
+	return { label, end };
+}
+
+/**
+ * Is this label defined in the note body? An UNDEFINED label is not a link at all, and markdown-it is
+ * precise about the consequence: it emits the opening `[` as literal text and resumes at the next
+ * character, so `# See [foo][bar]` with only `foo` defined renders wholly literal — NOT a link on
+ * `foo`. Branch (g) reproduces that by falling through to the literal path.
+ *
+ * The empty label is rejected here rather than merely missing from the set, because it is what
+ * `[ ]` and `[]` normalise to: `# [ ] Not a task` must stay a false-positive guard, and a `[ ]:` line
+ * cannot define it (markdown-it's definition rule bails on an empty normalised label). Both measured.
+ */
+function isDefinedReference(references: ReferenceLabels, label: string): boolean {
+	if (!references) return false;
+	const key = normalizeReference(label);
+	return key !== '' && references.has(key);
+}
+
 // --- buffers ----------------------------------------------------------------
 
 interface Buffer {
@@ -411,10 +484,10 @@ interface ScanResult {
  *  (e) image BEFORE (g), so a nested image is not mangled by the link branch.
  *  (h) math is display-only: Joplin excludes `math_inline` from the id, but a reader sees the formula.
  *
- * `footnotes` is the set of `[^label]:` definitions the caller found in the note body, or null when it
- * has none to offer — see the `FootnoteLabels` doc comment.
+ * `env` carries the two whole-body facts a heading line cannot know on its own: the `[^label]:`
+ * footnote definitions and the `[label]:` link reference definitions — see the `InlineEnv` doc comment.
  */
-function scan(src: string, depth: number, allowLinks: boolean, footnotes: FootnoteLabels): ScanResult {
+function scan(src: string, depth: number, allowLinks: boolean, env: InlineEnv): ScanResult {
 	const D = buf();
 	const S = buf();
 	let alt = '';
@@ -518,18 +591,32 @@ function scan(src: string, depth: number, allowLinks: boolean, footnotes: Footno
 		// (e) image — contributes to NEITHER buffer (an image token reaches neither textContent nor the
 		// id: `# ![alt](…)` renders as `<h1 id="">`). The alt is stashed for the S3 fallback so a
 		// heading that would otherwise draw a blank bar still says something.
+		//
+		// Inline `![alt](dest)` first, then the three REFERENCE forms, exactly as markdown-it's image
+		// rule orders them. A reference image with NO definition is not an image at all: the whole thing
+		// stays literal, `!` included — `# ![alt text][ref]` renders as `![alt text][ref]`, id
+		// `alt-textref` (measured). Note the image rule uses the NESTING-permissive label scan, so it
+		// has no no-links-inside-links check to mirror; only the link branch (g) does.
 		if (c === '!' && src[i + 1] === '[') {
 			const lend = matchLabel(src, i + 1);
-			if (lend > 0 && src[lend] === '(') {
-				const dend = matchDestination(src, lend);
-				if (dend > 0) {
+			if (lend > 0) {
+				let imageEnd = -1;
+				if (src[lend] === '(') {
+					const dend = matchDestination(src, lend);
+					if (dend > 0) imageEnd = dend;
+				}
+				if (imageEnd < 0) {
+					const ref = referenceAt(src, i + 2, lend);
+					if (isDefinedReference(env.references, ref.label)) imageEnd = ref.end;
+				}
+				if (imageEnd > 0) {
 					if (!alt) {
-						const a = scan(src.slice(i + 2, lend - 1), depth + 1, true, footnotes);
+						const a = scan(src.slice(i + 2, lend - 1), depth + 1, true, env);
 						alt = collapse(stripEmphasis(a.D));
 					}
 					push(D, SENTINEL, true);
 					push(S, SENTINEL, true);
-					i = dend;
+					i = imageEnd;
 					continue;
 				}
 			}
@@ -546,7 +633,7 @@ function scan(src: string, depth: number, allowLinks: boolean, footnotes: Footno
 		// `# Use [^0-9] to match`.
 		if (c === '[' && src[i + 1] === '^') {
 			const f = /^\[\^([^\]\s]+)\]/.exec(src.slice(i));
-			if (f && footnotes && footnotes.has(f[1])) {
+			if (f && env.footnotes && env.footnotes.has(f[1])) {
 				push(D, SENTINEL, true);
 				push(S, SENTINEL, true);
 				i += f[0].length;
@@ -554,20 +641,38 @@ function scan(src: string, depth: number, allowLinks: boolean, footnotes: Footno
 			}
 		}
 
-		// (g) inline link — the label is unwrapped into both buffers; the destination reaches neither.
+		// (g) link — the label is unwrapped into both buffers; the destination reaches neither.
+		//
+		// Inline `[text](dest)` is tried first and, when its destination does not close, the REFERENCE
+		// forms are tried on the same label — that fallback is markdown-it's own (`parseReference` is
+		// set when the `)` is missing), and it is measurable: `# See [ref](unclosed` with a `[ref]:`
+		// definition renders "See ref(unclosed", not the literal.
 		if (c === '[' && allowLinks && depth < 4) {
 			const le = matchLabel(src, i);
-			if (le > 0 && src[le] === '(') {
-				const de = matchDestination(src, le);
-				if (de > 0) {
+			if (le > 0) {
+				let linkEnd = -1;
+				if (src[le] === '(') {
+					const de = matchDestination(src, le);
+					if (de > 0) linkEnd = de;
+				}
+				if (linkEnd < 0) {
+					const ref = referenceAt(src, i + 1, le);
+					if (isDefinedReference(env.references, ref.label)) linkEnd = ref.end;
+				}
+				if (linkEnd > 0) {
 					// THE NO-LINKS-INSIDE-LINKS RULE — do not omit this. CommonMark forbids a link inside a
 					// link, so if the label already produced one, the OUTER brackets are literal text and
 					// only the INNER link unwraps. Measured:
 					//   `# [see [x](u) here](https://e.example.com)`
 					//     display "[see x here](https://e.example.com)", id "see-x-herehttpseexamplecom".
+					//   `# [see [x][ref] here][ref]` (ref defined)
+					//     display "[see x here]ref",                    id "see-x-hereref".
+					// It covers the reference forms for the same reason it covers the inline one:
+					// markdown-it scans a LINK label with nesting disabled, so an inner link makes
+					// `parseLinkLabel` return -1 and the whole rule fail before it ever looks a label up.
 					// The label MUST be scanned with allowLinks = true: scanning it with links disabled can
 					// never set sawLink, which silently reintroduces the bug.
-					const innerScan = scan(src.slice(i + 1, le - 1), depth + 1, true, footnotes);
+					const innerScan = scan(src.slice(i + 1, le - 1), depth + 1, true, env);
 					if (!innerScan.sawLink) {
 						// An EMPTY label contributes nothing, so like an image it needs a run-breaking
 						// sentinel: without one, `# **[](u)** tail` merges its two `**` into a run of four
@@ -578,7 +683,7 @@ function scan(src: string, depth: number, allowLinks: boolean, footnotes: Footno
 						pushBuf(S, innerScan.S);
 						if (!alt && innerScan.alt) alt = innerScan.alt;
 						sawLink = true;
-						i = de;
+						i = linkEnd;
 						continue;
 					}
 					// else: fall through — emit '[' literally and rescan from i+1 so the inner link unwraps
@@ -636,10 +741,33 @@ function scan(src: string, depth: number, allowLinks: boolean, footnotes: Footno
  * hands them down; a caller with no body (the fast check's direct `renderInline` calls) passes null and
  * gets every `[^…]` literal, which is what Joplin renders for a note that defines no footnotes.
  *
- * Note this is a narrower dependency than the reference-LINK pre-pass PLAN.md deliberately declined:
- * it needs no extra pass, and `[^x]:` at the start of a line has no plausible false positive.
+ * The `[label]:` link-reference pre-pass below now rides in the very same loop, for the very same
+ * reason and at the same cost.
  */
 export type FootnoteLabels = ReadonlySet<string> | null;
+
+/**
+ * The NORMALISED `[label]: destination` link reference definitions present in the note body, or null
+ * when the caller has none.
+ *
+ * Same shape and same justification as `FootnoteLabels`, and the same rule decides them: markdown-it
+ * resolves `[text][label]`, `[text][]` and `[text]` against `state.env.references`, which the block
+ * pass fills from the WHOLE body — so a definition BELOW the heading counts, and a heading with no
+ * definition anywhere is literal text. `parseHeadings` collects them in the line scan it already runs;
+ * a caller with no body passes null and gets every reference form literal, which is exactly what
+ * Joplin renders for a note that defines none.
+ *
+ * The set holds labels already through `normalizeReference`, so the lookup in `isDefinedReference` is
+ * a plain `Set.has` on the hot path and the folding cost is paid once per definition line instead of
+ * once per lookup.
+ */
+export type ReferenceLabels = ReadonlySet<string> | null;
+
+/** The whole-body facts a single heading line cannot determine on its own. */
+interface InlineEnv {
+	footnotes: FootnoteLabels;
+	references: ReferenceLabels;
+}
 
 export interface InlineText {
 	/** What a reader sees: the rendered `<h*>`'s textContent, whitespace-collapsed and trimmed. */
@@ -661,14 +789,18 @@ export interface InlineText {
  * to uslug folds link destinations into the anchor, something the regexes this module replaced never
  * did. See `fallbackSlugSource`.
  */
-export function renderInline(raw: string, footnotes: FootnoteLabels = null): InlineText {
+export function renderInline(
+	raw: string,
+	footnotes: FootnoteLabels = null,
+	references: ReferenceLabels = null,
+): InlineText {
 	// S0 — guards. The last two make identity for a plain prose heading structural, not emergent.
 	if (typeof raw !== 'string') return { display: '', slugSource: '' };
 	if (raw.length > MAX_INLINE_LEN) return { display: collapse(raw), slugSource: fallbackSlugSource(raw) };
 	if (!TRIGGER.test(raw)) return { display: collapse(raw), slugSource: raw };
 
 	try {
-		const r = scan(raw, 0, true, footnotes);
+		const r = scan(raw, 0, true, { footnotes, references });
 		let display = collapse(stripEmphasis(r.D));
 		// S3 — image alt fallback. Fires ONLY when strict parity would be empty (and AFTER the emphasis
 		// strip, so `# **![banner](u)**` still falls back rather than labelling the bar "****"), so it can

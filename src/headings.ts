@@ -10,10 +10,11 @@
 //     Markdown in the strip (GitHub issue #1) and mis-slugged 14 measured constructs, every one of
 //     them a silently dead jump.
 //
-// The two layers run as two PHASES over one line scan: the block pass collects the heading lines and
-// the `[^label]:` footnote definitions, then the inline pass resolves each heading. The split exists
-// only because a footnote definition may sit BELOW the heading that references it, and a marker with
-// no definition is literal text in Joplin — see branch (f) of src/inlineText.ts.
+// The two layers run as two PHASES over one line scan: the block pass collects the heading lines, the
+// `[^label]:` footnote definitions and the `[label]: destination` link reference definitions, then the
+// inline pass resolves each heading. The split exists only because either kind of definition may sit
+// BELOW the heading that uses it, and an undefined marker or label is literal text in Joplin — see
+// branches (e), (f) and (g) of src/inlineText.ts.
 //
 // The slugs generated here must match the anchor ids Joplin puts on rendered headings, so the
 // coordinator's scrollToHash jump lands on the right element. Joplin builds those ids with
@@ -25,7 +26,7 @@
 // included either way). See the header of src/inlineText.ts.
 
 import uslug from '@joplin/fork-uslug';
-import { renderInline } from './inlineText';
+import { normalizeReference, renderInline } from './inlineText';
 
 export interface EditorHeading {
 	level: number;
@@ -64,8 +65,126 @@ function slugFor(slugSource: string, seen: Map<string, number>): string {
 /**
  * A `[^label]:` definition line. markdown-it-footnote's block rule wants the `[` at the start of the
  * block (0-3 spaces of indent, since 4+ is a code block) and a label with no whitespace in it.
+ *
+ * It is tested BEFORE the link-reference definition below, mirroring the block ruler: markdown-it-footnote
+ * registers `footnote_def` with `md.block.ruler.before('reference', …)`, so `[^1]: note` is a footnote
+ * definition and never a link reference.
  */
 const FOOTNOTE_DEF = /^ {0,3}\[\^([^\]\s]+)\]:/;
+
+/** Cheap gate: only a line whose first non-indent character is `[` can be a definition of either kind. */
+const DEF_OPENER = /^ {0,3}\[/;
+
+/**
+ * The RAW label of a `[label]: destination "optional title"` link reference definition line, or null.
+ *
+ * Hand-rolled rather than regex'd, for the same reason `matchLabel` in src/inlineText.ts is: the parts
+ * nest and escape, and expressing "a label, then a destination, then an optional quoted title, then
+ * nothing" as one pattern needs adjacent quantifiers on the keystroke hot path. Every rule below is
+ * markdown-it's `rules_block/reference.js`, and every one of them was measured against Joplin 3.7.6:
+ *
+ *   `   [ref]: url`                    definition (0-3 spaces of indent)
+ *   `    [ref]: url`                   NOT — 4 spaces is an indented code block
+ *   `[a\]b]: url`                      definition; the label keeps its backslash on BOTH sides, which
+ *                                      is what makes it match `# See [a\]b]`
+ *   `[a[b]]: url`                      NOT — a raw `[` inside the label kills the rule outright
+ *   `[]: url`, `[ ]: url`              NOT — the label normalises to empty (so `# [ ] Not a task` is
+ *                                      still safe from a shortcut reference; measured)
+ *   `[ref]:url`                        definition — the space after the colon is optional
+ *   `[ref]: <url>`                     definition
+ *   `[ref]: url "Title"`               definition
+ *   `[ref]: url junk`                  NOT — anything but a title after the destination fails the rule
+ *   `[ref]:`                           NOT — an empty destination is not a definition
+ *
+ * KNOWN NARROWER THAN markdown-it, both times in the SAFE direction (we leave the heading literal,
+ * which is exactly what v0.2.10 did, so no anchor can move to a value the renderer disagrees with):
+ *   * a MULTI-LINE definition (`[ref]:` on one line, the destination on the next) is not recognised;
+ *   * a definition inside a blockquote (`> [ref]: url`) is not recognised, though markdown-it hoists
+ *     it into the shared `env.references` all the same.
+ */
+function referenceDefinitionLabel(line: string): string | null {
+	let i = 0;
+	while (i < 3 && line[i] === ' ') i++;
+	if (line[i] !== '[') return null;
+
+	const labelStart = i + 1;
+	let j = labelStart;
+	let labelEnd = -1;
+	while (j < line.length) {
+		const c = line[j];
+		if (c === '\\') {
+			j += 2;
+			continue;
+		}
+		if (c === '[') return null;
+		if (c === ']') {
+			labelEnd = j;
+			break;
+		}
+		j++;
+	}
+	if (labelEnd < 0 || line[labelEnd + 1] !== ':') return null;
+
+	let k = labelEnd + 2;
+	while (line[k] === ' ' || line[k] === '\t') k++;
+	if (k >= line.length) return null;
+
+	if (line[k] === '<') {
+		// The `<destination>` form: no unescaped angle bracket inside, and it must close on this line.
+		let d = k + 1;
+		let closed = false;
+		while (d < line.length) {
+			const c = line[d];
+			if (c === '\\') {
+				d += 2;
+				continue;
+			}
+			if (c === '<') return null;
+			if (c === '>') {
+				closed = true;
+				d++;
+				break;
+			}
+			d++;
+		}
+		if (!closed) return null;
+		k = d;
+	} else {
+		const destStart = k;
+		while (k < line.length && line[k] !== ' ' && line[k] !== '\t') {
+			k += line[k] === '\\' ? 2 : 1;
+		}
+		if (k === destStart) return null;
+	}
+
+	while (line[k] === ' ' || line[k] === '\t') k++;
+	if (k < line.length) {
+		const open = line[k];
+		const close = open === '(' ? ')' : open;
+		if (open !== '"' && open !== "'" && open !== '(') return null;
+		let d = k + 1;
+		let closed = false;
+		while (d < line.length) {
+			const c = line[d];
+			if (c === '\\') {
+				d += 2;
+				continue;
+			}
+			if (c === close) {
+				closed = true;
+				d++;
+				break;
+			}
+			d++;
+		}
+		if (!closed) return null;
+		k = d;
+		while (line[k] === ' ' || line[k] === '\t') k++;
+		if (k < line.length) return null;
+	}
+
+	return line.slice(labelStart, labelEnd);
+}
 
 export function parseHeadings(body: string): EditorHeading[] {
 	const headings: EditorHeading[] = [];
@@ -80,6 +199,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 	// correctly ignored, because the fence and comment state is right here.
 	const pending: { level: number; raw: string; line: number }[] = [];
 	const footnotes = new Set<string>();
+	const references = new Set<string>();
 
 	// Tracks the marker (``` or ~~~) that opened the current fenced block, or null when outside a
 	// fence. A fence can only be closed by its own marker type, so a ~~~ line inside a ``` block is
@@ -87,8 +207,24 @@ export function parseHeadings(body: string): EditorHeading[] {
 	let fenceMarker: string | null = null;
 	let inComment = false;
 
+	// Is a paragraph currently open? A link reference definition is a BLOCK rule, and `reference` is not
+	// one of the rules that can terminate a paragraph, so a line shaped like a definition that merely
+	// CONTINUES a paragraph is ordinary prose. Measured, both with a `# See [ref]` heading above them:
+	//     "some text\n[ref]: https://…"   → NOT a definition, the heading stays literal
+	//     "- item\n[ref]: https://…"      → NOT a definition (lazy list continuation)
+	//     "Title\n=====\n[ref]: https://…" → IS a definition (the setext heading closed the block)
+	// This one boolean is what removes the "false positives on any paragraph line shaped like [x]: y"
+	// objection that deferred this feature in the first place. A footnote definition line counts as
+	// opening a paragraph, because its container swallows the following line the same way.
+	let paragraphOpen = false;
+
 	for (let index = 0; index < lines.length; index++) {
 		const rawLine = lines[index];
+
+		if (rawLine.trim() === '') {
+			paragraphOpen = false;
+			continue;
+		}
 
 		// Toggle fenced code blocks (``` or ~~~), but not a single-line inline `code`.
 		const fenceMatch = rawLine.match(/^\s{0,3}(```|~~~)/);
@@ -100,6 +236,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 				fenceMarker = null; // closing the matching fence
 			}
 			// A non-matching marker inside an open fence is content — leave the fence state alone.
+			paragraphOpen = false;
 			continue;
 		}
 		if (fenceMarker !== null) continue;
@@ -107,6 +244,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 		// Toggle HTML comment blocks.
 		if (/<!--/.test(rawLine) && !/-->/.test(rawLine)) {
 			inComment = true;
+			paragraphOpen = false;
 			continue;
 		}
 		if (inComment) {
@@ -131,16 +269,41 @@ export function parseHeadings(body: string): EditorHeading[] {
 				// `# ![alt](…)` still labels its bar.) Gating on the display string would drop the bar
 				// editor-side and desynchronise the two counts.
 				const raw = (atxMatch[2] ?? '').trim();
+				// An ATX heading is its own block either way, so the next line starts fresh.
+				paragraphOpen = false;
 				if (!raw) continue;
 				pending.push({ level, raw, line: index });
 				continue;
 			}
 		}
 
-		// A footnote DEFINITION anywhere in the body (above or below) is what turns a `[^1]` marker in a
-		// heading into a footnote rather than literal text — see branch (f) of src/inlineText.ts.
-		const footnoteDef = rawLine.match(FOOTNOTE_DEF);
-		if (footnoteDef) footnotes.add(footnoteDef[1]);
+		// Both kinds of DEFINITION line, in the block ruler's own order (footnote_def is registered
+		// `before('reference')`, so `[^1]: note` can never be a link reference). A definition anywhere in
+		// the body — above the heading or below it — is what turns a `[^1]` marker into a footnote and a
+		// `[label]` into a link; without one both stay literal text. See branches (e)/(f)/(g) of
+		// src/inlineText.ts. Doing this HERE rather than in a pre-pass of its own is what keeps a
+		// definition inside a fenced block or an HTML comment correctly ignored: that state is right here.
+		if (DEF_OPENER.test(rawLine)) {
+			const footnoteDef = rawLine.match(FOOTNOTE_DEF);
+			if (footnoteDef) {
+				footnotes.add(footnoteDef[1]);
+				// A footnote definition opens a container whose first paragraph swallows the next line.
+				paragraphOpen = true;
+				continue;
+			}
+			if (!paragraphOpen) {
+				const label = referenceDefinitionLabel(rawLine);
+				if (label !== null) {
+					const key = normalizeReference(label);
+					// markdown-it rejects an empty normalised label outright (`[]:`, `[ ]:`), and the FIRST
+					// definition of a label wins — a Set gives us both, since we never store a destination.
+					if (key !== '') references.add(key);
+					continue;
+				}
+			}
+		}
+
+		paragraphOpen = true;
 
 		// Setext headings: a line of text underlined by === (H1) or --- (H2). We detect them when we
 		// reach the underline line and look back at the text line above it. The text line was already
@@ -151,6 +314,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 		// paragraph line (non-blank, not ATX, not a list/blockquote/table/fence marker), and the line
 		// ABOVE the text line must be blank or the start of the document (a heading stands alone).
 		const underline = rawLine.match(/^\s{0,3}(=+|-+)\s*$/);
+		if (underline) paragraphOpen = false;
 		if (underline && index > 0) {
 			const textLineRaw = lines[index - 1];
 			const textLine = textLineRaw.trim();
@@ -171,7 +335,7 @@ export function parseHeadings(body: string): EditorHeading[] {
 	// Phase two. Order is preserved, so the duplicate counter in `slugFor` sees exactly the sequence the
 	// old single-pass version fed it.
 	for (const h of pending) {
-		const r = renderInline(h.raw, footnotes);
+		const r = renderInline(h.raw, footnotes, references);
 		headings.push({ level: h.level, text: r.display, line: h.line, slug: slugFor(r.slugSource, seen) });
 	}
 
