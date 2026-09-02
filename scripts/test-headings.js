@@ -233,12 +233,26 @@ const IDENTITY = [
 ];
 
 // ---------------------------------------------------------------------------
-// PATHOLOGY — adversarial inputs. The point is not the numbers (measured worst case is 3.5 ms); it is
-// to fail a future regex-based rewrite that reintroduces catastrophic backtracking on a path that runs
-// from the CodeMirror updateListener on EVERY keystroke.
+// PATHOLOGY — adversarial inputs. The point is not today's numbers; it is to fail a future
+// regex-based rewrite that reintroduces catastrophic backtracking on a path that runs from the
+// CodeMirror updateListener on EVERY keystroke.
+//
+// The 50 ms budget is applied to `renderInline` — the scanner this repo owns and the thing the budget
+// exists to police. It deliberately is NOT applied to `parseHeadings`, because that also calls uslug,
+// which on these inputs costs 11-46 ms all by itself and swamps the signal: measured, `'*' x 2000`
+// is renderInline 0.02 ms + uslug 38.3 ms, and the 5000-character heading is renderInline 0.08 ms +
+// uslug 46.4 ms. uslug is a third-party dependency, unchanged by us and out of our control; folding
+// its cost in here would make the check flake at 50 ms while telling us nothing about the scanner.
+// Against renderInline the same budget is ~35x headroom over the measured worst case (1.4 ms), which
+// is the margin the check was designed to have.
+//
+// `parseHeadings` is still driven over every input, and still asserted not to throw — the no-throw
+// half is about the whole pipeline. It carries only a loose ceiling that exists to catch a genuine
+// hang, not to police uslug.
 // ---------------------------------------------------------------------------
 
 const PATHOLOGY_BUDGET_MS = 50;
+const PATHOLOGY_PIPELINE_CEILING_MS = 500;
 
 const PATHOLOGY = [
 	{ name: '600 open brackets', body: '# ' + '['.repeat(600) },
@@ -376,13 +390,27 @@ function main() {
 	const pathology = block('PATHOLOGY');
 	for (const p of PATHOLOGY) {
 		pathology.check(p.name, () => {
-			const started = Date.now();
-			const parsed = parseHeadings(p.body);
-			const elapsed = Date.now() - started;
-			assert.ok(Array.isArray(parsed), 'returns an array rather than throwing');
+			// The scanner, timed. This is the assertion that matters.
+			const inlineStarted = Date.now();
+			const resolved = renderInline(p.body.slice(2));
+			const inlineElapsed = Date.now() - inlineStarted;
+			assert.equal(typeof resolved.display, 'string', 'renderInline returns a display string');
 			assert.ok(
-				elapsed <= PATHOLOGY_BUDGET_MS,
-				`took ${elapsed}ms, budget ${PATHOLOGY_BUDGET_MS}ms — a quadratic/backtracking regression`,
+				inlineElapsed <= PATHOLOGY_BUDGET_MS,
+				`renderInline took ${inlineElapsed}ms, budget ${PATHOLOGY_BUDGET_MS}ms — a ` +
+					'quadratic/backtracking regression in the scanner',
+			);
+
+			// The whole pipeline, for the no-throw guarantee (a throw here would kill the CodeMirror
+			// updateListener and silently freeze the strip for the rest of the session).
+			const pipelineStarted = Date.now();
+			const parsed = parseHeadings(p.body);
+			const pipelineElapsed = Date.now() - pipelineStarted;
+			assert.ok(Array.isArray(parsed), 'parseHeadings returns an array rather than throwing');
+			assert.ok(
+				pipelineElapsed <= PATHOLOGY_PIPELINE_CEILING_MS,
+				`parseHeadings took ${pipelineElapsed}ms, ceiling ${PATHOLOGY_PIPELINE_CEILING_MS}ms — ` +
+					'this is a hang guard, not a scanner guard (most of it is uslug)',
 			);
 		});
 	}
