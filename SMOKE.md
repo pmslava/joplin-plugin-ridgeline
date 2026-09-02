@@ -89,6 +89,12 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       string in each pane, with no raw `[`, `]`, `(`, backtick or `~~` anywhere. Hovering a compact bar
       shows the same text as its native tooltip. Then **click each row in turn**: both panes jump to
       that heading. The last one (`A ~~strike~~ word`) used to jump nowhere at all.
+- [ ] **Reference links in headings.** Add `## Read [the guide][guide] first` near the TOP of that
+      note and, at the very BOTTOM (after a blank line), the definition `[guide]: https://example.com`.
+      Both outlines read *Read the guide first*, and clicking the row jumps in both panes. Now delete
+      the definition line: both outlines fall back to the literal `Read [the guide][guide] first`, in
+      step, because that is what Joplin renders without it. Put it back and they resolve again — the
+      label depends on a line far below the heading, which is the point.
 
 ## Settings (live)
 

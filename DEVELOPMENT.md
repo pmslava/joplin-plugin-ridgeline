@@ -53,8 +53,9 @@ excludes `e2e/`, so the specs are not type-checked either.
 
 Every expectation was measured against Joplin 3.7.6's real renderer (markdown-it + markdown-it-anchor +
 `@joplin/fork-uslug`), and the rows whose anchor changed when the old regex pair was replaced carry a
-`was:` comment naming the old value. The blocks are MATRIX (the 61 cases, including three sets that
-must be parsed together because they share the duplicate-suffix counter), IDENTITY (every heading
+`was:` comment naming the old value. The blocks are MATRIX (the measured cases, including the sets that
+must be parsed together because they share the duplicate-suffix counter or a `[label]:` definition,
+and the rows whose body carries that definition with them), IDENTITY (every heading
 string the E2E suite asserts on, proven to pass through byte-identical), STRUCTURE (fences, HTML
 comments, indent limits, setext guards and line numbers), PATHOLOGY (adversarial inputs under a 50 ms
 budget, there to fail a future regex rewrite that reintroduces backtracking on the per-keystroke path),
@@ -149,10 +150,11 @@ touches your real Joplin profile.
   - `index.ts` — plugin entry point: registers settings, commands, and the coordinator.
   - `headings.ts` — the editor-side heading parser: a line scan for BLOCK structure (fences, HTML
     comment blocks, ATX indent limits, setext underlines) plus the slug and its duplicate suffix. That
-    scan also collects the note's `[^label]:` footnote definitions, because a `[^1]` in a heading is a
-    footnote only if a definition exists somewhere in the body — so the headings are resolved in a
-    second phase, after the whole body has been walked. It is **not** shared with the viewer —
-    `viewer.js` reads the rendered DOM and cannot import TypeScript.
+    scan also collects the note's `[^label]:` footnote definitions and its `[label]: destination` link
+    reference definitions, because a `[^1]` or a `[label]` in a heading resolves only if a definition
+    exists somewhere in the body — so the headings are resolved in a second phase, after the whole body
+    has been walked. It is **not** shared with the viewer — `viewer.js` reads the rendered DOM and
+    cannot import TypeScript.
   - `inlineText.ts` — resolves a heading's inline Markdown into the text a reader sees plus the token
     stream Joplin slugifies; the single source for both the label the strip shows and the anchor it
     jumps to. Pure, dependency-free, and pinned by `npm run test:headings`.

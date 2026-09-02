@@ -192,11 +192,11 @@ export function parseHeadings(body: string): EditorHeading[] {
 	const lines = body.split('\n');
 
 	// The heading lines, collected by the block scan below and resolved afterwards. Two phases, still
-	// ONE pass over the lines: a `[^1]` marker in a heading is only a footnote if a `[^1]:` definition
-	// exists somewhere in the body — including BELOW the heading — so the inline resolution cannot start
-	// until the whole body has been walked. Collecting the definitions inside the existing loop (rather
-	// than in a pre-pass of its own) also means a `[^1]:` inside a fenced block or an HTML comment is
-	// correctly ignored, because the fence and comment state is right here.
+	// ONE pass over the lines: a `[^1]` marker is a footnote, and a `[label]` a link, only if a matching
+	// definition exists somewhere in the body — including BELOW the heading — so the inline resolution
+	// cannot start until the whole body has been walked. Collecting both kinds inside the existing loop
+	// (rather than in a pre-pass of their own) also means a definition inside a fenced block or an HTML
+	// comment is correctly ignored, because the fence and comment state is right here.
 	const pending: { level: number; raw: string; line: number }[] = [];
 	const footnotes = new Set<string>();
 	const references = new Set<string>();
