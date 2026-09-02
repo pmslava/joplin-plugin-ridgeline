@@ -54,10 +54,20 @@ const MAX_INLINE_LEN = 1024;
 const TRIGGER = /[\\`<&![\]$*_~=]/;
 
 /**
- * Deliberately small. markdown-it decodes the full HTML5 named-entity table; we decode the handful that
- * plausibly appear in a heading and leave the rest literal (`&hellip;` stays `&hellip;`). The slug is
- * unaffected either way — uslug deletes `&` and `;` with no separator — so the only cost of a miss is a
- * display string that shows the entity source, which is what today's code does for all of them.
+ * A subset of markdown-it's full HTML5 named-entity table: the XML five, the no-break space, and the
+ * punctuation that actually turns up in prose headings. An unlisted name stays literal — `&frac12;`
+ * displays as `&frac12;`.
+ *
+ * A MISS IS NOT FREE, and an earlier version of this comment wrongly claimed it was ("the slug is
+ * unaffected either way — uslug deletes & and ;"). uslug deletes the punctuation but KEEPS the letters
+ * between it, so an unlisted `# Design &mdash; a note` slugs to `design-mdash-a-note` while Joplin's
+ * rendered id is `design-a-note` — a silently dead viewer→editor jump, not merely a display string
+ * showing its source. That is why this list is longer than the six basics, and why
+ * `entity-unlisted-named` is pinned in scripts/test-headings.js recording what we still get wrong.
+ *
+ * NBSP is written as an escape, and is U+00A0 rather than a plain space: markdown-it emits the real
+ * character, `&nbsp;` and `&#160;` must not decode to two different strings, and a literal NBSP byte
+ * here is invisible in a diff and can be normalised away by an editor or a lint autofix.
  */
 const ENTITIES: { [name: string]: string } = {
 	amp: '&',
@@ -65,8 +75,37 @@ const ENTITIES: { [name: string]: string } = {
 	gt: '>',
 	quot: '"',
 	apos: "'",
-	nbsp: ' ',
+	nbsp: '\u00a0',
+	mdash: '\u2014',
+	ndash: '\u2013',
+	hellip: '\u2026',
+	lsquo: '\u2018',
+	rsquo: '\u2019',
+	ldquo: '\u201c',
+	rdquo: '\u201d',
+	copy: '\u00a9',
+	reg: '\u00ae',
+	trade: '\u2122',
+	deg: '\u00b0',
+	times: '\u00d7',
+	middot: '\u00b7',
 };
+
+/**
+ * Pushed into a buffer in place of a construct that contributes NO text — an image, an HTML tag or
+ * comment, a footnote marker, and math on the slug side. It is protected, so the emphasis pass cannot
+ * read it as a delimiter, and `stripEmphasis` deletes every occurrence on its way out, so it can never
+ * reach a caller (this is emphatically NOT the raw-NUL leak an earlier prototype shipped).
+ *
+ * Its whole job is to BREAK a delimiter run. Without it the `**` before an image and the `**` after it
+ * become one contiguous run of four, the length gate skips it, and the markers survive into the bar
+ * label: `# **![alt](u)** tail` showed "**** tail" against the viewer's "tail". For `~` and `_`, which
+ * uslug KEEPS, the merged run moved the anchor too (`~~~~-tail` instead of `tail`).
+ *
+ * A literal U+0000 in the source cannot be confused with it: markdown-it normalises NUL to U+FFFD
+ * before parsing, and branch (i) below does the same.
+ */
+const SENTINEL = '\u0000';
 
 /** The canonical whitespace rule. Duplicated (by necessity) in `contentScripts/viewer.js` — see D3. */
 export function collapse(s: string): string {
@@ -79,6 +118,62 @@ function isAsciiPunct(c: string | undefined): boolean {
 
 function isWs(c: string | undefined): boolean {
 	return c === undefined || /\s/.test(c);
+}
+
+/**
+ * markdown-it's own `isValidEntityCode` (common/utils.js), transcribed. A code point it rejects is
+ * rendered as U+FFFD, never as the entity source — and, critically, `String.fromCodePoint` THROWS a
+ * RangeError above U+10FFFF, which the catch in `renderInline` would turn into "degrade the whole
+ * heading back to raw Markdown": the exact issue #1 symptom, resurrected by `# a &#9999999; b`.
+ */
+function isValidEntityCode(c: number): boolean {
+	if (c >= 0xd800 && c <= 0xdfff) return false; // surrogate half
+	if (c >= 0xfdd0 && c <= 0xfdef) return false; // never used
+	// markdown-it writes these two as `c & 0xFFFF`; the code here is always a non-negative decimal or
+	// hex literal, so the modulo is the same test without a bitwise operator.
+	if (c % 0x10000 === 0xffff || c % 0x10000 === 0xfffe) return false; // non-characters
+	if (c >= 0x00 && c <= 0x08) return false; // control codes
+	if (c === 0x0b) return false;
+	if (c >= 0x0e && c <= 0x1f) return false;
+	if (c >= 0x7f && c <= 0x9f) return false;
+	if (c > 0x10ffff) return false;
+	return true;
+}
+
+/**
+ * CommonMark's comment production is narrower than "anything between `<!--` and `-->`": the text may
+ * not begin with `>` or `->`, may not contain `--`, and may not end with `-`. Joplin's bundled
+ * markdown-it carries it as `<!---->|<!--(?:-?[^>-])(?:-?[^-])*-->`, so `# a <!-- a--b --> c` is NOT a
+ * comment — it renders literally and its id is `a-a-b-c`. Written as plain string tests because no
+ * lookbehind is available here (see the PORTABILITY RULE above).
+ */
+function isCommentBody(body: string): boolean {
+	if (body === '') return true;
+	if (body[0] === '>') return false;
+	if (body[0] === '-' && body[1] === '>') return false;
+	if (body.indexOf('--') >= 0) return false;
+	if (body[body.length - 1] === '-') return false;
+	return true;
+}
+
+/**
+ * The slug source used when the scan is SKIPPED — an over-long heading (S0) or a bug caught below.
+ *
+ * It is deliberately not `raw`. uslug over raw Markdown folds a link destination into the anchor,
+ * including a note link's 32 hex characters, which the regex pair this module replaced never did: a
+ * 1100-character heading ending in `[T](:/a1b2…)` slugged to `…yyy-t` before and would slug to
+ * `…yyy-ta1b2c3d4…` if we passed raw through. So the fallback is a cheap, linear approximation of that
+ * old behaviour — unwrap `[text](dest)`, drop code-span backticks — rather than a strict identity.
+ * Both character classes exclude their own delimiters, so there is no nested quantifier to backtrack.
+ */
+function fallbackSlugSource(raw: string): string {
+	let out = raw;
+	for (let pass = 0; pass < 8; pass++) {
+		const next = out.replace(/\[([^[\]]*)\]\([^()]*\)/g, '$1');
+		if (next === out) break;
+		out = next;
+	}
+	return out.replace(/`/g, '');
 }
 
 function runLength(src: string, i: number, ch: string): number {
@@ -230,17 +325,27 @@ function stripEmphasis(b: Buffer): string {
 		if (c !== '*' && c !== '_' && c !== '~' && c !== '=') continue;
 		let len = 1;
 		while (i + len < n && ch[i + len] === c && !pr[i + len]) len++;
-		// Strikethrough and mark are two-character delimiters only: a lone `~` is a path, not a marker.
-		if ((c === '~' || c === '=') && len !== 2) {
-			i += len - 1;
-			continue;
+		const runEnd = i + len - 1;
+		let at = i;
+		if (c === '~' || c === '=') {
+			// Strikethrough and mark are TWO-character delimiters. A lone `~` is a path, not a marker; a
+			// LONGER run is split the way markdown-it splits it (rules_inline/strikethrough.js) — the odd
+			// delimiter is emitted as literal text and the rest nest — so `a ~~~b~~~ c` renders `a ~b~ c`
+			// and `a ~~~~b~~~~ c` renders `a b c`. uslug KEEPS `~`, so treating a 3-run as literal moved
+			// the anchor as well as the label.
+			if (len < 2) {
+				i = runEnd;
+				continue;
+			}
+			at = i + (len % 2);
+			len -= len % 2;
 		}
 		if ((c === '*' || c === '_') && len > 3) {
-			i += len - 1;
+			i = runEnd;
 			continue;
 		}
-		const prev = i > 0 ? ch[i - 1] : undefined;
-		const next = i + len < n ? ch[i + len] : undefined;
+		const prev = at > 0 ? ch[at - 1] : undefined;
+		const next = at + len < n ? ch[at + len] : undefined;
 		const leftFlank = !isWs(next) && (!isAsciiPunct(next) || isWs(prev) || isAsciiPunct(prev));
 		const rightFlank = !isWs(prev) && (!isAsciiPunct(prev) || isWs(next) || isAsciiPunct(next));
 		let canOpen = leftFlank;
@@ -250,8 +355,8 @@ function stripEmphasis(b: Buffer): string {
 			canOpen = leftFlank && (!rightFlank || isAsciiPunct(prev));
 			canClose = rightFlank && (!leftFlank || isAsciiPunct(next));
 		}
-		runs.push({ at: i, len, c, canOpen, canClose, drop: false });
-		i += len - 1;
+		runs.push({ at, len, c, canOpen, canClose, drop: false });
+		i = runEnd;
 	}
 
 	const open: Run[] = [];
@@ -278,8 +383,10 @@ function stripEmphasis(b: Buffer): string {
 		for (let d = 0; d < runs[m].len; d++) drop[runs[m].at + d] = true;
 	}
 
+	// SENTINEL characters are deleted here, on the one path every buffer leaves by, so a placeholder for
+	// a text-free construct can never reach a bar label, a tooltip or uslug.
 	let out = '';
-	for (let q = 0; q < n; q++) if (!drop[q]) out += ch[q];
+	for (let q = 0; q < n; q++) if (!drop[q] && ch[q] !== SENTINEL) out += ch[q];
 	return out;
 }
 
@@ -303,8 +410,11 @@ interface ScanResult {
  *      `` # Use `[text](url)` here `` as `use-text-here` instead of `use-texturl-here`.
  *  (e) image BEFORE (g), so a nested image is not mangled by the link branch.
  *  (h) math is display-only: Joplin excludes `math_inline` from the id, but a reader sees the formula.
+ *
+ * `footnotes` is the set of `[^label]:` definitions the caller found in the note body, or null when it
+ * has none to offer — see the `FootnoteLabels` doc comment.
  */
-function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
+function scan(src: string, depth: number, allowLinks: boolean, footnotes: FootnoteLabels): ScanResult {
 	const D = buf();
 	const S = buf();
 	let alt = '';
@@ -365,14 +475,18 @@ function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
 				i += m[0].length;
 				continue;
 			}
-			m = /^<!--[\s\S]*?-->/.exec(rest);
-			if (m) {
+			m = /^<!--([\s\S]*?)-->/.exec(rest);
+			if (m && isCommentBody(m[1])) {
+				push(D, SENTINEL, true);
+				push(S, SENTINEL, true);
 				i += m[0].length;
 				continue;
 			}
 			m = /^<\/?[A-Za-z][A-Za-z0-9\-]*(\s+[^<>]*?)?\/?>/.exec(rest);
 			if (m) {
 				// html_inline is excluded from the id; the text BETWEEN two tags is not.
+				push(D, SENTINEL, true);
+				push(S, SENTINEL, true);
 				i += m[0].length;
 				continue;
 			}
@@ -387,7 +501,8 @@ function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
 				let dec: string | null = null;
 				if (body[0] === '#') {
 					const hex = body[1] === 'x' || body[1] === 'X';
-					dec = String.fromCodePoint(parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10));
+					const code = parseInt(hex ? body.slice(2) : body.slice(1), hex ? 16 : 10);
+					dec = isValidEntityCode(code) ? String.fromCodePoint(code) : '\ufffd';
 				} else if (Object.prototype.hasOwnProperty.call(ENTITIES, body)) {
 					dec = ENTITIES[body];
 				}
@@ -409,9 +524,11 @@ function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
 				const dend = matchDestination(src, lend);
 				if (dend > 0) {
 					if (!alt) {
-						const a = scan(src.slice(i + 2, lend - 1), depth + 1, true);
+						const a = scan(src.slice(i + 2, lend - 1), depth + 1, true, footnotes);
 						alt = collapse(stripEmphasis(a.D));
 					}
+					push(D, SENTINEL, true);
+					push(S, SENTINEL, true);
 					i = dend;
 					continue;
 				}
@@ -420,9 +537,18 @@ function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
 
 		// (f) footnote reference — excluded from the id, and dropped from the display too (Joplin's own
 		// textContent leaks a bare `[1]`, which the viewer walker also skips, so both surfaces agree).
+		//
+		// ONLY when a `[^label]:` definition exists in the body. markdown-it-footnote's ref rule bails on
+		// an unknown label (`if (typeof state.env.footnotes.refs[':' + label] === 'undefined') return
+		// false;`), so an UNDEFINED `[^1]` renders literally. Dropping it unconditionally moved the
+		// anchor away from Joplin — and, since the viewer can only skip a real `sup.footnote-ref`
+		// element, made the two strips disagree — for a plain typo and for the regex negated class in
+		// `# Use [^0-9] to match`.
 		if (c === '[' && src[i + 1] === '^') {
-			const f = /^\[\^[^\]\s]+\]/.exec(src.slice(i));
-			if (f) {
+			const f = /^\[\^([^\]\s]+)\]/.exec(src.slice(i));
+			if (f && footnotes && footnotes.has(f[1])) {
+				push(D, SENTINEL, true);
+				push(S, SENTINEL, true);
 				i += f[0].length;
 				continue;
 			}
@@ -441,8 +567,13 @@ function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
 					//     display "[see x here](https://e.example.com)", id "see-x-herehttpseexamplecom".
 					// The label MUST be scanned with allowLinks = true: scanning it with links disabled can
 					// never set sawLink, which silently reintroduces the bug.
-					const innerScan = scan(src.slice(i + 1, le - 1), depth + 1, true);
+					const innerScan = scan(src.slice(i + 1, le - 1), depth + 1, true, footnotes);
 					if (!innerScan.sawLink) {
+						// An EMPTY label contributes nothing, so like an image it needs a run-breaking
+						// sentinel: without one, `# **[](u)** tail` merges its two `**` into a run of four
+						// and shows "**** tail".
+						if (!innerScan.D.ch.length) push(D, SENTINEL, true);
+						if (!innerScan.S.ch.length) push(S, SENTINEL, true);
 						pushBuf(D, innerScan.D);
 						pushBuf(S, innerScan.S);
 						if (!alt && innerScan.alt) alt = innerScan.alt;
@@ -462,23 +593,53 @@ function scan(src: string, depth: number, allowLinks: boolean): ScanResult {
 		// concatenates the hidden source, the MathML annotation and the katex-html into
 		// "Solve x^2x2x^2x2 now"; viewer.js gets a matching walker so both surfaces show the same string.
 		if (c === '$') {
-			const mm =
-				/^\$\$([\s\S]+?)\$\$/.exec(src.slice(i)) || /^\$([^\s$][^$]*?)\$(?!\d)/.exec(src.slice(i));
+			// `$$…$$` is NOT display math inside a heading. katex's INLINE rule sees an empty span
+			// between the first two dollars and emits them literally; its BLOCK rule needs `$$` alone on
+			// its own line, which a heading's inline content never is. So Joplin renders the delimiters:
+			// `# a $$x^2$$ b` has textContent "a $$x^2$$ b" and id "a-x2-b". Emitting both characters
+			// literally reproduces that, and stops the second `$` from opening a spurious inline span.
+			if (src[i + 1] === '$') {
+				push(D, '$$', false);
+				push(S, '$$', false);
+				i += 2;
+				continue;
+			}
+			const mm = /^\$([^\s$][^$]*?)\$(?!\d)/.exec(src.slice(i));
 			if (mm) {
 				push(D, mm[1], true);
+				// The slug side gets a placeholder, not the formula: `math_inline` never reaches the id,
+				// but the delimiters on either side of it must not merge into one emphasis run.
+				push(S, SENTINEL, true);
 				i += mm[0].length;
 				continue;
 			}
 		}
 
-		// (i) ordinary character — unprotected, so the emphasis pass can still see it.
-		push(D, c, false);
-		push(S, c, false);
+		// (i) ordinary character — unprotected, so the emphasis pass can still see it. A literal NUL is
+		// normalised to U+FFFD exactly as markdown-it does (core/normalize), which is also what keeps
+		// SENTINEL unambiguous.
+		const lit = c === SENTINEL ? '\ufffd' : c;
+		push(D, lit, false);
+		push(S, lit, false);
 		i++;
 	}
 
 	return { D, S, alt, sawLink };
 }
+
+/**
+ * The `[^label]:` definitions present in the note body, or null when the caller has none.
+ *
+ * A footnote MARKER is a footnote only if a definition for it exists somewhere in the body — that is
+ * markdown-it-footnote's own rule, not a nicety — so `renderInline` cannot decide branch (f) from the
+ * heading line alone. `parseHeadings` collects the labels in the single line scan it already runs and
+ * hands them down; a caller with no body (the fast check's direct `renderInline` calls) passes null and
+ * gets every `[^…]` literal, which is what Joplin renders for a note that defines no footnotes.
+ *
+ * Note this is a narrower dependency than the reference-LINK pre-pass PLAN.md deliberately declined:
+ * it needs no extra pass, and `[^x]:` at the start of a line has no plausible false positive.
+ */
+export type FootnoteLabels = ReadonlySet<string> | null;
 
 export interface InlineText {
 	/** What a reader sees: the rendered `<h*>`'s textContent, whitespace-collapsed and trimmed. */
@@ -491,24 +652,30 @@ export interface InlineText {
  * Resolve one heading's inline Markdown into the display text and the slug source. Never throws.
  *
  * A throw here would kill the CodeMirror updateListener that calls `parseHeadings` on every keystroke
- * and silently freeze the strip for the rest of the session, so the whole body degrades to today's
- * behaviour (`{ display: collapse(raw), slugSource: raw }`) rather than dying — and every unparseable
- * construct inside the scan falls through to "emit the character literally", never to an error.
+ * and silently freeze the strip for the rest of the session, so the whole body degrades rather than
+ * dying — and every unparseable construct inside the scan falls through to "emit the character
+ * literally", never to an error.
+ *
+ * The degraded value is `collapse(raw)` for the display, which IS what the strip showed before this
+ * module existed, and `fallbackSlugSource(raw)` for the slug, which is NOT `raw`: feeding raw Markdown
+ * to uslug folds link destinations into the anchor, something the regexes this module replaced never
+ * did. See `fallbackSlugSource`.
  */
-export function renderInline(raw: string): InlineText {
+export function renderInline(raw: string, footnotes: FootnoteLabels = null): InlineText {
 	// S0 — guards. The last two make identity for a plain prose heading structural, not emergent.
 	if (typeof raw !== 'string') return { display: '', slugSource: '' };
-	if (raw.length > MAX_INLINE_LEN) return { display: collapse(raw), slugSource: raw };
+	if (raw.length > MAX_INLINE_LEN) return { display: collapse(raw), slugSource: fallbackSlugSource(raw) };
 	if (!TRIGGER.test(raw)) return { display: collapse(raw), slugSource: raw };
 
 	try {
-		const r = scan(raw, 0, true);
+		const r = scan(raw, 0, true, footnotes);
 		let display = collapse(stripEmphasis(r.D));
-		// S3 — image alt fallback. Fires ONLY when strict parity would be empty, so it can never
-		// overwrite real text; `viewer.js` has the same img[alt] fallback so the two surfaces agree.
+		// S3 — image alt fallback. Fires ONLY when strict parity would be empty (and AFTER the emphasis
+		// strip, so `# **![banner](u)**` still falls back rather than labelling the bar "****"), so it can
+		// never overwrite real text; `viewer.js` has the same img[alt] fallback so the surfaces agree.
 		if (!display && r.alt) display = r.alt;
 		return { display, slugSource: stripEmphasis(r.S) };
 	} catch (error) {
-		return { display: collapse(raw), slugSource: raw };
+		return { display: collapse(raw), slugSource: fallbackSlugSource(raw) };
 	}
 }

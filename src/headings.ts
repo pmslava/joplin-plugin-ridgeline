@@ -10,6 +10,11 @@
 //     Markdown in the strip (GitHub issue #1) and mis-slugged 14 measured constructs, every one of
 //     them a silently dead jump.
 //
+// The two layers run as two PHASES over one line scan: the block pass collects the heading lines and
+// the `[^label]:` footnote definitions, then the inline pass resolves each heading. The split exists
+// only because a footnote definition may sit BELOW the heading that references it, and a marker with
+// no definition is literal text in Joplin — see branch (f) of src/inlineText.ts.
+//
 // The slugs generated here must match the anchor ids Joplin puts on rendered headings, so the
 // coordinator's scrollToHash jump lands on the right element. Joplin builds those ids with
 // laurent22's uslug fork over the heading's `text` + `code_inline` token contents, plus a "-2"/"-3"
@@ -56,10 +61,25 @@ function slugFor(slugSource: string, seen: Map<string, number>): string {
 	return count === 0 ? base : `${base}-${count + 1}`;
 }
 
+/**
+ * A `[^label]:` definition line. markdown-it-footnote's block rule wants the `[` at the start of the
+ * block (0-3 spaces of indent, since 4+ is a code block) and a label with no whitespace in it.
+ */
+const FOOTNOTE_DEF = /^ {0,3}\[\^([^\]\s]+)\]:/;
+
 export function parseHeadings(body: string): EditorHeading[] {
 	const headings: EditorHeading[] = [];
 	const seen = new Map<string, number>();
 	const lines = body.split('\n');
+
+	// The heading lines, collected by the block scan below and resolved afterwards. Two phases, still
+	// ONE pass over the lines: a `[^1]` marker in a heading is only a footnote if a `[^1]:` definition
+	// exists somewhere in the body — including BELOW the heading — so the inline resolution cannot start
+	// until the whole body has been walked. Collecting the definitions inside the existing loop (rather
+	// than in a pre-pass of its own) also means a `[^1]:` inside a fenced block or an HTML comment is
+	// correctly ignored, because the fence and comment state is right here.
+	const pending: { level: number; raw: string; line: number }[] = [];
+	const footnotes = new Set<string>();
 
 	// Tracks the marker (``` or ~~~) that opened the current fenced block, or null when outside a
 	// fence. A fence can only be closed by its own marker type, so a ~~~ line inside a ``` block is
@@ -105,16 +125,22 @@ export function parseHeadings(body: string): EditorHeading[] {
 			if (atxMatch) {
 				const level = atxMatch[1].length;
 				// The emptiness guard tests the RAW heading content, never the resolved display text: an
-				// image-only heading (`# ![alt](…)`) resolves to "" for parity with Joplin's textContent,
-				// yet Joplin still emits <h1 id="">, which viewer.js:137's `h1[id]` selector finds. Gating
-				// on the display string would drop the bar editor-side and desynchronise the two counts.
+				// image-only heading with an empty alt (`# ![](…)`) resolves to "" for parity with Joplin's
+				// textContent, yet Joplin still emits <h1 id="">, which the `h1[id], h2[id], …` selector in
+				// viewer.js's headingElements() finds. (A NON-empty alt falls back to the alt text, so
+				// `# ![alt](…)` still labels its bar.) Gating on the display string would drop the bar
+				// editor-side and desynchronise the two counts.
 				const raw = (atxMatch[2] ?? '').trim();
 				if (!raw) continue;
-				const r = renderInline(raw);
-				headings.push({ level, text: r.display, line: index, slug: slugFor(r.slugSource, seen) });
+				pending.push({ level, raw, line: index });
 				continue;
 			}
 		}
+
+		// A footnote DEFINITION anywhere in the body (above or below) is what turns a `[^1]` marker in a
+		// heading into a footnote rather than literal text — see branch (f) of src/inlineText.ts.
+		const footnoteDef = rawLine.match(FOOTNOTE_DEF);
+		if (footnoteDef) footnotes.add(footnoteDef[1]);
 
 		// Setext headings: a line of text underlined by === (H1) or --- (H2). We detect them when we
 		// reach the underline line and look back at the text line above it. The text line was already
@@ -137,12 +163,16 @@ export function parseHeadings(body: string): EditorHeading[] {
 				// the code-span slug bug alive under an underline. Guard on the RAW text (see above); the
 				// recorded line stays the TEXT line, not the underline.
 				const raw = textLine.replace(/\s+#*$/, '').trim();
-				if (raw) {
-					const r = renderInline(raw);
-					headings.push({ level, text: r.display, line: index - 1, slug: slugFor(r.slugSource, seen) });
-				}
+				if (raw) pending.push({ level, raw, line: index - 1 });
 			}
 		}
+	}
+
+	// Phase two. Order is preserved, so the duplicate counter in `slugFor` sees exactly the sequence the
+	// old single-pass version fed it.
+	for (const h of pending) {
+		const r = renderInline(h.raw, footnotes);
+		headings.push({ level: h.level, text: r.display, line: h.line, slug: slugFor(r.slugSource, seen) });
 	}
 
 	return headings;
