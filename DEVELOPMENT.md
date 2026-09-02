@@ -11,11 +11,13 @@ the release flow, see [PUBLISHING.md](PUBLISHING.md).
 
 ## Static checks
 
-Ridgeline has no unit-harness layer — the plugin is exercised by the real-app E2E suite below. What it
-does have is one source audit that no type-check or build could ever replace:
+Ridgeline has one unit-level harness — the heading display/slug matrix — and one source audit. Every
+other behaviour is exercised by the real-app E2E suite below. Both run in a second and neither needs a
+build:
 
 ```
 npm run test:sandbox-proxy
+npm run test:headings
 ```
 
 `joplin` is not an object, it is `sandboxProxy(wrappedTarget)`. Its get trap **pushes** the property
@@ -35,6 +37,31 @@ over `src/` is: **every `joplin.*` chain must be one uninterrupted read-and-call
 character. Namespace capture is rejected too, even though the proxy nominally tolerates one. A violation
 fails the check with `file:line` and the offending chain, and it runs in CI as the first step of the
 build gate the publish flow depends on.
+
+### The heading matrix
+
+`npm run test:headings` (`scripts/test-headings.js`) compiles `src/inlineText.ts` + `src/headings.ts`
+straight from source with the repo's own TypeScript — never from `dist/`, which can be stale, and into
+which `headings.ts` is bundled *twice* — and runs 61 measured cases plus four supporting blocks.
+
+The contract it defends is this: for a given heading line, the strip must show **the text a reader
+sees** in the rendered note, and must compute an anchor **byte-identical to the id Joplin's renderer
+puts on that heading**. The second half is the reason this exists. A wrong anchor throws nothing and
+logs nothing — `resolveLineFromAnchor` returns `null`, `handleJump` skips the editor scroll, and the
+jump just quietly does not happen. No type-check, build or lint can see that, and `tsconfig.json`
+excludes `e2e/`, so the specs are not type-checked either.
+
+Every expectation was measured against Joplin 3.7.6's real renderer (markdown-it + markdown-it-anchor +
+`@joplin/fork-uslug`), and the rows whose anchor changed when the old regex pair was replaced carry a
+`was:` comment naming the old value. The blocks are MATRIX (the 61 cases, including three sets that
+must be parsed together because they share the duplicate-suffix counter), IDENTITY (every heading
+string the E2E suite asserts on, proven to pass through byte-identical), STRUCTURE (fences, HTML
+comments, indent limits, setext guards and line numbers), PATHOLOGY (adversarial inputs under a 50 ms
+budget, there to fail a future regex rewrite that reintroduces backtracking on the per-keystroke path),
+and VIEWER DRIFT GUARD.
+
+**A new heading construct gets a matrix row before it gets code.** If Joplin's live behaviour ever
+disagrees with a row, the live app wins: change the row and say why.
 
 ## End-to-end tests
 
@@ -120,17 +147,30 @@ touches your real Joplin profile.
 
 - `src/` — the plugin source.
   - `index.ts` — plugin entry point: registers settings, commands, and the coordinator.
-  - `headings.ts` — heading parsing shared by the editor and viewer.
+  - `headings.ts` — the editor-side heading parser: a line scan for BLOCK structure (fences, HTML
+    comment blocks, ATX indent limits, setext underlines) plus the slug and its duplicate suffix. It is
+    **not** shared with the viewer — `viewer.js` reads the rendered DOM and cannot import TypeScript.
+  - `inlineText.ts` — resolves a heading's inline Markdown into the text a reader sees plus the token
+    stream Joplin slugifies; the single source for both the label the strip shows and the anchor it
+    jumps to. Pure, dependency-free, and pinned by `npm run test:headings`.
   - `tokens.ts` — the single file of design tokens (bar lengths per level, thickness, gaps, hover-panel
     sizing, colour opacity). Change a number here, rebuild, and both surfaces update.
   - `common.ts` — shared helpers.
-  - `contentScripts/` — the CodeMirror editor extension and the rendered-viewer script.
+  - `contentScripts/` — the CodeMirror editor extension and the rendered-viewer script. `viewer.js` is
+    a plain-JS asset copied verbatim, so it duplicates exactly one rule from the TypeScript side: the
+    whitespace normaliser `.replace(/\s+/g, ' ').trim()`, which must stay byte-identical to
+    `collapse()` in `inlineText.ts`. Its VIEWER DRIFT GUARD lives in `scripts/test-headings.js`; the
+    behavioural guard is the editor↔viewer row-array equality in `e2e/heading-links.spec.ts`. Do **not**
+    port the Markdown scanner into `viewer.js` — its input is post-render text, where a Markdown
+    stripper would eat literal characters the renderer deliberately shows (`` # Use `[x](y)` now ``
+    renders as the literal `Use [x](y) now`).
   - `manifest.json` — the plugin manifest (id, version, `app_min_version`, screenshots).
-- `e2e/` — the Playwright end-to-end specs (16 spec files), plus `launch.ts`/`helpers.ts` for driving
+- `e2e/` — the Playwright end-to-end specs (17 spec files), plus `launch.ts`/`helpers.ts` for driving
   Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.
 - `scripts/audit-sandbox-proxy.js` — the sandbox-proxy read-and-call audit described above.
+- `scripts/test-headings.js` — the heading display/slug matrix described above.
 - `webpack.config.js`, `plugin.config.json`, `tsconfig.json` — the build.
 - `playwright.config.ts` — the E2E runner configuration.
 - `docs/images/` — the screenshots referenced by the README and manifest.

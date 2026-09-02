@@ -19,7 +19,9 @@ jumps there.
 ## Test setup
 
 Use a note with several headings at **different levels** (a mix of `#`…`######`) and enough text to
-scroll. Exercise with the Markdown editor's **inline rendering ON** (Settings → Editor → *Render markup
+scroll. Include at least one heading that carries **inline markup** — e.g. `## [Some note](:/<32-hex>)`
+(paste a real note link with *Copy Markdown link*) — so the display-text checks below have something to
+bite on. Exercise with the Markdown editor's **inline rendering ON** (Settings → Editor → *Render markup
 in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless a check says otherwise.
 
 ## Minimap
@@ -80,6 +82,13 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       fenced code block is correctly ignored).
 - [ ] **Max heading depth.** Settings → Ridgeline → **Maximum heading depth** → e.g. *H1–H3*. Without
       relaunching, both minimaps drop the H4–H6 bars. Set it back to *H1–H6* — they return.
+- [ ] **Headings with inline markup read like the rendered note.** In a note containing
+      `## [Some note](:/<32-hex>)`, `## Read [the docs](https://example.com) online`,
+      `` ### The `api` method `` and `## A ~~strike~~ word`, both hover outlines (editor and viewer)
+      show *Some note* / *Read the docs online* / *The api method* / *A strike word* — the **identical**
+      string in each pane, with no raw `[`, `]`, `(`, backtick or `~~` anywhere. Hovering a compact bar
+      shows the same text as its native tooltip. Then **click each row in turn**: both panes jump to
+      that heading. The last one (`A ~~strike~~ word`) used to jump nowhere at all.
 
 ## Settings (live)
 
