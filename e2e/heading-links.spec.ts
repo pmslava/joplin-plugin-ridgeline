@@ -28,10 +28,11 @@ import {
  *
  * ON MAIN, deliberately, NOT every assertion flips — a spec where everything failed could not tell
  * "fixed the display" from "rewrote the slug rules":
- *   FAILS on main — T1 (rows 1,2,3,5,6 carry raw Markdown; rows 5 and 6 carry the old anchors
- *   `a-~~strike~~-word` and `use-text-here`), T2 (same raw strings in the TOC), T3's row-array
- *   equality (the VIEWER already read correctly, so main is asserted to be internally inconsistent
- *   between its own two surfaces), T5 and T6 (both jumps to row 6 land nowhere).
+ *   FAILS on main — T1 (rows 1,2,3,5,6,7 carry raw Markdown; rows 5, 6 and 7 carry the old anchors
+ *   `a-~~strike~~-word`, `use-text-here` and `read-the-guideguide-first`), T2 (same raw strings in the
+ *   TOC), T3's row-array equality (the VIEWER already read correctly, so main is asserted to be
+ *   internally inconsistent between its own two surfaces), T5 and T6 (both jumps to row 7 land
+ *   nowhere).
  *   PASSES on main — T4, because its locator is built from the EXPECTED slug, which is Joplin's own
  *   rendered id; T3's `data-anchor` array, because viewer.js sets it from `h.id`; and T1 rows 0 and 4,
  *   the plain-text control and the false-positive guard.
@@ -70,11 +71,32 @@ const HEADINGS = [
   { raw: '## Notes (see below)', text: 'Notes (see below)', slug: 'notes-see-below', level: 2 },
   // Slug fix: uslug KEEPS '~', so the unstripped ~~ used to leak into the id as `a-~~strike~~-word`.
   { raw: '## A ~~strike~~ word', text: 'A strike word', slug: 'a-strike-word', level: 2 },
-  // Slug fix AND the jump target for T5/T6: a code span is opaque, so the link inside it stays
-  // literal. Main un-linked inside the code span and produced `use-text-here`, which matches no
-  // rendered element — the jump died silently.
+  // Slug fix: a code span is opaque, so the link inside it stays literal. Main un-linked inside the
+  // code span and produced `use-text-here`, which matches no rendered element.
   { raw: '## Use `[text](url)` here', text: 'Use [text](url) here', slug: 'use-texturl-here', level: 2 },
+  // The REFERENCE link, and the jump target for T5/T6. It is a link only because of `REF_DEFINITION`
+  // at the very bottom of the body — a line ninety-odd rows below this heading, which is the whole
+  // reason resolving it needs a whole-body pre-pass rather than a look at the heading line. Main
+  // renders it literally and slugs it `read-the-guideguide-first`, which matches no rendered element,
+  // so both jumps below die silently there.
+  {
+    raw: '## Read [the guide][guide] first',
+    text: 'Read the guide first',
+    slug: 'read-the-guide-first',
+    level: 2,
+  },
 ];
+
+/**
+ * The definition that makes row 7 a link. It goes LAST, after every section, on purpose: a definition
+ * above the heading would be satisfied by a one-line lookahead, and this fixture exists to prove the
+ * body-wide collection works in the direction that cannot be.
+ *
+ * It must be preceded by a blank line. `reference` is a block rule and cannot terminate a paragraph, so
+ * a definition-shaped line that merely continues one is prose — measured against the real renderer, and
+ * pinned as `ref-def-in-paragraph` in scripts/test-headings.js.
+ */
+const REF_DEFINITION = '[guide]: https://example.com/guide';
 
 const JUMP_INDEX = HEADINGS.length - 1;
 
@@ -88,6 +110,7 @@ function buildBody(): string {
     for (let n = 0; n < filler; n++) lines.push(`Body ${i + 1} line ${n + 1}.`);
     lines.push('');
   });
+  lines.push(REF_DEFINITION);
   return lines.join('\n');
 }
 
@@ -200,8 +223,9 @@ test.describe('Issue #1 — headings containing links read as a reader sees them
     }
   });
 
-  // T5 — editor bar → viewer scroll. On main scrollToHash('use-text-here') finds no such element.
-  test('clicking the code-span heading bar scrolls the viewer to it', async () => {
+  // T5 — editor bar → viewer scroll. On main the strip's own anchor for this row is
+  // `read-the-guideguide-first`, so scrollToHash finds no such element.
+  test('clicking the reference-link heading bar scrolls the viewer to it', async () => {
     const { win } = joplin;
     await ensureViewerVisible(win);
     await scrollViewerTo(win, 0);
@@ -212,10 +236,12 @@ test.describe('Issue #1 — headings containing links read as a reader sees them
   });
 
   // T6 — viewer bar → editor scroll: the silent-failure case. The viewer sends Joplin's real id
-  // `use-texturl-here`; main's parser computes `use-text-here`, so resolveLineFromAnchor returns null
-  // and handleJump skips the editor scroll with NO exception and NO console warning. The poll simply
-  // times out. That is exactly why this assertion belongs in the suite.
-  test('clicking the code-span heading bar in the viewer scrolls the editor to it', async () => {
+  // `read-the-guide-first`; main's parser computes `read-the-guideguide-first`, so
+  // resolveLineFromAnchor returns null and handleJump skips the editor scroll with NO exception and NO
+  // console warning. The poll simply times out. That is exactly why this assertion belongs in the
+  // suite — and why the jump target is the reference row rather than the code-span one: it is the
+  // construct this change added, exercised through the surface where a wrong anchor is invisible.
+  test('clicking the reference-link heading bar in the viewer scrolls the editor to it', async () => {
     const { win } = joplin;
     const frame = await ensureViewerVisible(win);
     await scrollEditorTo(win, 0);

@@ -38,6 +38,11 @@ const OUT = path.join(REPO_ROOT, 'node_modules', '.cache', 'ridgeline-heading-te
 
 const NOTE = ':/a1b2c3d4e5f60718293a4b5c6d7e8f90';
 
+// The link reference definition the reference-link rows below append to their own body. It has to
+// travel WITH the heading: `parseHeadings` collects definitions from the whole body it is given, and
+// a row parsed without one is not testing the feature — it is testing the undefined case twice.
+const REF = '\n\n[ref]: https://e.example.com/r';
+
 // ---------------------------------------------------------------------------
 // The matrix. `line` and `level` are asserted too, so a refactor that resolves the text correctly but
 // loses the line bookkeeping still fails here rather than at the far end of a 45-minute E2E run.
@@ -66,13 +71,85 @@ const MATRIX = [
 	// unwraps. was: see-x-here
 	{ id: 'link-in-link', raw: '# [see [x](https://u.example.com) here](https://e.example.com)', level: 1, line: 0, display: '[see x here](https://e.example.com)', anchor: 'see-x-herehttpseexamplecom' },
 
-	// --- reference links: DELIBERATELY OUT OF SCOPE, pinned so a half-fix fails loudly -------
-	// With a '[ref]: :/…' definition elsewhere in the body Joplin renders "See t" / id "see-t".
-	// Resolving that needs a whole-body pre-pass, which would make a heading's label depend on a line
-	// hundreds of rows away. These two rows record TODAY'S behaviour on purpose.
-	{ id: 'ref-link-defined', raw: '# See [t][ref]', level: 1, line: 0, display: 'See [t][ref]', anchor: 'see-tref' },
+	// --- reference links ----------------------------------------------------
+	// The one construct v0.2.10 deliberately deferred, now resolved. A `[label]: destination` line
+	// ANYWHERE in the body (above the heading or below it) is what turns the three reference forms into
+	// links; with no definition every one of them stays literal, exactly as markdown-it leaves it. Rows
+	// whose behaviour depends on a definition carry it in the same `raw` string, the way `footnote-ref`
+	// does — parsed as ONE body, because that is the only way the pre-pass is exercised at all.
+	//
+	// was: 'See [t][ref]' / 'see-tref' — pinned wrong on purpose while the feature was out of scope.
+	{ id: 'ref-link-defined', raw: '# See [t][ref]' + REF, level: 1, line: 0, display: 'See t', anchor: 'see-t' },
 	{ id: 'ref-link-undefined', raw: '# See [t][ref]', level: 1, line: 0, display: 'See [t][ref]', anchor: 'see-tref' },
+	// Collapsed `[text][]`: markdown-it's `if (!label) label = text` makes the TEXT the label.
+	{ id: 'ref-link-collapsed-defined', raw: '# See [ref][]' + REF, level: 1, line: 0, display: 'See ref', anchor: 'see-ref' },
+	{ id: 'ref-link-collapsed-undefined', raw: '# See [ref][]', level: 1, line: 0, display: 'See [ref][]', anchor: 'see-ref' },
+	// Shortcut `[text]`: same fallback, no second bracket pair at all.
+	{ id: 'shortcut-ref-defined', raw: '# See [ref]' + REF, level: 1, line: 0, display: 'See ref', anchor: 'see-ref' },
 	{ id: 'shortcut-ref-undefined', raw: '# [t]', level: 1, line: 0, display: '[t]', anchor: 't' },
+	// THE precision case. markdown-it looks up the SECOND label, fails, and emits '[' as literal text —
+	// it never reconsiders `[foo]` on its own. So a defined `foo` does NOT rescue `[foo][bar]`; the
+	// whole thing is literal. A "resolve whichever label happens to be defined" implementation passes
+	// every other row here and fails this one.
+	{ id: 'ref-link-only-text-defined', raw: '# See [foo][bar]\n\n[foo]: https://e.example.com/f', level: 1, line: 0, display: 'See [foo][bar]', anchor: 'see-foobar' },
+
+	// --- label normalisation: markdown-it's normalizeReference ---------------
+	// Case-folded, so `[Docs]` finds `[docs]:` — and the DISPLAY keeps the heading's own casing.
+	{ id: 'ref-label-case', raw: '# See [Docs]\n\n[docs]: https://e.example.com/d', level: 1, line: 0, display: 'See Docs', anchor: 'see-docs' },
+	// Internal whitespace runs collapse to one space, so `[the  guide]` finds `[the guide]:`. Joplin's
+	// own textContent keeps the double space; both our surfaces collapse it (the canonical rule).
+	{ id: 'ref-label-whitespace', raw: '# Read [the  guide]\n\n[the guide]: https://e.example.com/g', level: 1, line: 0, display: 'Read the guide', anchor: 'read-the-guide' },
+	// A label that normalises to EMPTY can never be defined, which is what keeps the task-list guard
+	// below honest: `[ ]:` is not a definition at all, so `# [ ] Not a task` is still literal.
+	{ id: 'ref-task-space-defined', raw: '# [ ] Not a task\n\n[ ]: https://e.example.com/sp', level: 1, line: 0, display: '[ ] Not a task', anchor: 'not-a-task' },
+	// …but a REAL definition does swallow a task-like bracket, and Joplin agrees: this renders a link.
+	{ id: 'ref-task-like-defined', raw: '# [x] Not a task\n\n[x]: https://e.example.com/x', level: 1, line: 0, display: 'x Not a task', anchor: 'x-not-a-task' },
+	// The label is the RAW source slice on BOTH sides, backslash included, so an escaped `]` matches.
+	{ id: 'ref-escaped-label', raw: '# See [a\\]b]\n\n[a\\]b]: https://e.example.com/r', level: 1, line: 0, display: 'See a]b', anchor: 'see-ab' },
+
+	// --- which lines are definitions ----------------------------------------
+	// A definition BELOW the heading counts — that whole-body dependency is why this needed a pre-pass.
+	{ id: 'ref-def-below-heading', raw: '# See [t][ref]\n\nsome prose\n\n[ref]: https://e.example.com/r', level: 1, line: 0, display: 'See t', anchor: 'see-t' },
+	// A definition inside a fenced block is not a definition. The pre-pass runs inside the block scan
+	// precisely so the fence state is already known when the line is examined.
+	{ id: 'ref-def-in-fence', raw: '# See [t][ref]\n\n```\n[ref]: https://e.example.com/r\n```', level: 1, line: 0, display: 'See [t][ref]', anchor: 'see-tref' },
+	// `reference` is a BLOCK rule and cannot terminate a paragraph, so a definition-shaped line that
+	// merely CONTINUES one is prose. This is the false positive that deferred the feature; the
+	// paragraph-open flag in parseHeadings is what answers it.
+	{ id: 'ref-def-in-paragraph', raw: '# See [t][ref]\n\nsome prose\n[ref]: https://e.example.com/r', level: 1, line: 0, display: 'See [t][ref]', anchor: 'see-tref' },
+	// 4+ spaces of indent is an indented code block, not a definition.
+	{ id: 'ref-def-indent-4', raw: '# See [t][ref]\n\n    [ref]: https://e.example.com/r', level: 1, line: 0, display: 'See [t][ref]', anchor: 'see-tref' },
+	// After the destination markdown-it allows a TITLE and nothing else; bare trailing words kill it.
+	{ id: 'ref-def-with-title', raw: '# See [t][ref]\n\n[ref]: https://e.example.com/r "The title"', level: 1, line: 0, display: 'See t', anchor: 'see-t' },
+	{ id: 'ref-def-junk-after-dest', raw: '# See [t][ref]\n\n[ref]: https://e.example.com/a b', level: 1, line: 0, display: 'See [t][ref]', anchor: 'see-tref' },
+	// A raw '[' inside the label kills the definition outright, so the heading stays literal even
+	// though the two labels look identical.
+	{ id: 'ref-def-nested-label', raw: '# See [t][a[b]]\n\n[a[b]]: https://e.example.com/n', level: 1, line: 0, display: 'See [t][a[b]]', anchor: 'see-tab' },
+	// The FIRST definition of a label wins. Only the destination differs, which reaches neither
+	// surface, so what this row really pins is that a repeated label does not break the collection.
+	{ id: 'ref-def-duplicate-label', raw: '# See [t][ref]\n\n[ref]: https://e.example.com/first\n\n[ref]: https://e.example.com/second', level: 1, line: 0, display: 'See t', anchor: 'see-t' },
+
+	// --- reference forms meeting the other constructs ------------------------
+	// An image reference contributes to neither buffer, exactly like an inline image; the display falls
+	// back to the alt (see `image-only`), which is why it reads 'alt text' against Joplin's own ''.
+	{ id: 'ref-image-defined', raw: '# ![alt text][ref]' + REF, level: 1, line: 0, display: 'alt text', anchor: '' },
+	// Undefined, it is not an image at all — the '!' is literal too.
+	{ id: 'ref-image-undefined', raw: '# ![alt text][ref]', level: 1, line: 0, display: '![alt text][ref]', anchor: 'alt-textref' },
+	// …and it still has to break the delimiter run around it, or the two `**` merge into a run of four.
+	{ id: 'ref-image-in-emphasis', raw: '# **![alt][ref]** tail' + REF, level: 1, line: 0, display: 'tail', anchor: 'tail' },
+	// The label is scanned RECURSIVELY, so emphasis inside it resolves for both surfaces.
+	{ id: 'ref-shortcut-emphasis', raw: '# See [**bold** t]\n\n[**bold** t]: https://e.example.com/e', level: 1, line: 0, display: 'See bold t', anchor: 'see-bold-t' },
+	// The no-links-inside-links rule covers the reference forms too: markdown-it scans a LINK label
+	// with nesting disabled, so an inner link makes the OUTER brackets literal.
+	{ id: 'ref-in-ref', raw: '# [see [x][ref] here][ref]' + REF, level: 1, line: 0, display: '[see x here]ref', anchor: 'see-x-hereref' },
+	{ id: 'ref-inline-link-in-label', raw: '# [a [b](https://u.example.com) c][ref]' + REF, level: 1, line: 0, display: '[a b c]ref', anchor: 'a-b-cref' },
+	// A code span is opaque to the reference forms as well.
+	{ id: 'ref-in-code', raw: '# Use `[t][ref]` here' + REF, level: 1, line: 0, display: 'Use [t][ref] here', anchor: 'use-tref-here' },
+	// markdown-it falls back to the reference forms when an inline link's '(' never closes, so this is
+	// a LINK on 'ref' followed by the literal text '(unclosed'.
+	{ id: 'ref-unclosed-paren', raw: '# See [ref](unclosed' + REF, level: 1, line: 0, display: 'See ref(unclosed', anchor: 'see-refunclosed' },
+	// Setext is a separate code path and must see the same reference set.
+	{ id: 'ref-setext-h1', raw: 'See [t][ref]\n===' + REF, level: 1, line: 0, display: 'See t', anchor: 'see-t' },
 
 	// --- links the renderer makes for you -----------------------------------
 	{ id: 'autolink', raw: '# <https://e.example.com/a>', level: 1, line: 0, display: 'https://e.example.com/a', anchor: 'httpseexamplecoma' },
@@ -133,10 +210,10 @@ const MATRIX = [
 	// so the miss was a dead jump, not just a display string showing its source.
 	// was: design-mdash-a-note
 	{ id: 'entity-mdash', raw: '# Design &mdash; a note', level: 1, line: 0, display: 'Design \u2014 a note', anchor: 'design-a-note' },
-	// PINNED KNOWN-WRONG, the way `ref-link-defined` is: a named entity outside our table stays literal,
-	// and its NAME survives into the anchor. Joplin renders "a \u00bd b" with id "a-12-b". Widening
-	// ENTITIES in src/inlineText.ts is the fix; this row exists so the gap cannot be forgotten, and so a
-	// half-done widening fails loudly here instead of drifting.
+	// PINNED KNOWN-WRONG — the last row in this file that is: a named entity outside our table stays
+	// literal, and its NAME survives into the anchor. Joplin renders "a \u00bd b" with id "a-12-b".
+	// Widening ENTITIES in src/inlineText.ts is the fix; this row exists so the gap cannot be forgotten,
+	// and so a half-done widening fails loudly here instead of drifting.
 	{ id: 'entity-unlisted-named', raw: '# a &frac12; b', level: 1, line: 0, display: 'a &frac12; b', anchor: 'a-frac12-b' },
 	// String.fromCodePoint THROWS above U+10FFFF; the catch in renderInline would then degrade the WHOLE
 	// heading back to raw Markdown — issue #1, resurrected by one bad entity. markdown-it substitutes
@@ -269,6 +346,27 @@ const GROUPS = [
 		],
 	},
 	{
+		ids: ['ref-dup-first', 'ref-dup-second'],
+		body: '# [ref]\n\n# ref\n\n[ref]: https://e.example.com/r',
+		// The reference-link twin of `collide-after-cleaning`: the SECOND heading contains no markup at
+		// all, yet its anchor moves to `ref-2` because the one above it stops being literal `[ref]` once
+		// a definition three lines further down is honoured. Measured — this is exactly what Joplin does,
+		// and it is the sharpest statement of what "a heading's label depends on a distant line" means.
+		expected: [
+			{ level: 1, text: 'ref', line: 0, slug: 'ref' },
+			{ level: 1, text: 'ref', line: 2, slug: 'ref-2' },
+		],
+	},
+	{
+		ids: ['ref-two-headings-one-def-first', 'ref-two-headings-one-def-second'],
+		body: '# See [t][ref]\n\n## Also [ref] here\n\n[ref]: https://e.example.com/r',
+		// One definition serves every heading in the note, in both directions.
+		expected: [
+			{ level: 1, text: 'See t', line: 0, slug: 'see-t' },
+			{ level: 2, text: 'Also ref here', line: 2, slug: 'also-ref-here' },
+		],
+	},
+	{
 		ids: ['collide-after-cleaning-first', 'collide-after-cleaning-second'],
 		body: '# A ~~x~~\n# A x',
 		// The one way a slug change reaches an UNMODIFIED heading: the second line contains no Markdown
@@ -326,7 +424,25 @@ const IDENTITY = [
 // `parseHeadings` is still driven over every input, and still asserted not to throw — the no-throw
 // half is about the whole pipeline. It carries only a loose ceiling that exists to catch a genuine
 // hang, not to police uslug.
+//
+// A row may carry two optional fields, for the reference-link inputs whose stress is spread over a
+// whole BODY rather than one line:
+//   `inline` — what to hand `renderInline` instead of the default `body.slice(2)`. Without it a
+//              multi-line body would be measured through the S0 length guard and time nothing.
+//   `refs`   — the reference labels to hand `renderInline`, so the lookup path is actually taken; an
+//              input where every label MISSES exercises the fall-through, not the resolver. They are
+//              pushed through `normalizeReference` first, because that is the contract the set carries
+//              (`ReferenceLabels` holds folded labels so the hot path is a bare `Set.has`) — handing it
+//              raw labels makes every lookup miss and the row measures nothing.
+// The pre-pass itself — one `referenceDefinitionLabel` call per definition-shaped line — is policed by
+// the pipeline ceiling below, which is the only place `parseHeadings` sees the whole body.
 // ---------------------------------------------------------------------------
+
+// 400 labels, and the 400 `[label]: destination` lines that define them.
+const REF_LABELS = [];
+for (let n = 0; n < 400; n++) REF_LABELS.push(`l${n}`);
+const REF_DEF_LINES = REF_LABELS.map((l) => `[${l}]: https://e.example.com/${l}`).join('\n');
+const REF_SHORTCUTS = REF_LABELS.slice(0, 150).map((l) => `[${l}]`).join(' ');
 
 const PATHOLOGY_BUDGET_MS = 50;
 const PATHOLOGY_PIPELINE_CEILING_MS = 500;
@@ -346,6 +462,26 @@ const PATHOLOGY = [
 	{ name: '600 dollar signs', body: '# ' + '$'.repeat(600) },
 	{ name: '50 nested link openers', body: '# ' + '['.repeat(50) + 'x' + ']('.repeat(50) + 'u' + ')'.repeat(50) },
 	{ name: '5000-char heading (over MAX_INLINE_LEN — times the S0 guard, not the scanner)', body: '# ' + 'a b '.repeat(1250) },
+	// Reference links, both halves. The heading is 400 "][" pairs — every one of them opens a label
+	// scan, a second label scan and a lookup that misses — while the body carries 400 definition lines
+	// the pre-pass must walk. Quadratic behaviour in either half (re-scanning the body per heading,
+	// re-folding a label per lookup, a backtracking definition regex) shows up here.
+	{
+		name: '400 "][" pairs over 400 reference definitions',
+		body: '# ' + ']['.repeat(400) + '\n\n' + REF_DEF_LINES,
+		inline: ']['.repeat(400),
+		refs: REF_LABELS,
+	},
+	// The same body with every lookup HITTING, so the recursive label scan runs 150 times too. 150 is
+	// chosen to keep the heading (939 characters) just under MAX_INLINE_LEN: one more and the S0 guard
+	// returns before the scanner runs and the row measures nothing.
+	{
+		name: '150 defined shortcut references over 400 definitions',
+		body: '# ' + REF_SHORTCUTS + '\n\n' + REF_DEF_LINES,
+		inline: REF_SHORTCUTS,
+		refs: REF_LABELS,
+		resolvesTo: 'l0 l1 l2',
+	},
 ];
 
 // ---------------------------------------------------------------------------
@@ -388,7 +524,7 @@ function block(name) {
 function main() {
 	compile();
 	const { parseHeadings } = require(path.join(OUT, 'headings.js'));
-	const { renderInline } = require(path.join(OUT, 'inlineText.js'));
+	const { renderInline, normalizeReference } = require(path.join(OUT, 'inlineText.js'));
 
 	// --- 1. MATRIX ----------------------------------------------------------
 	const matrix = block('MATRIX');
@@ -471,9 +607,15 @@ function main() {
 		pathology.check(p.name, () => {
 			// The scanner, timed. This is the assertion that matters.
 			const inlineStarted = Date.now();
-			const resolved = renderInline(p.body.slice(2));
+			const refs = p.refs ? new Set(p.refs.map(normalizeReference)) : null;
+			const resolved = renderInline(p.inline ?? p.body.slice(2), null, refs);
 			const inlineElapsed = Date.now() - inlineStarted;
 			assert.equal(typeof resolved.display, 'string', 'renderInline returns a display string');
+			if (p.resolvesTo !== undefined) {
+				// Without this the "defined" row can silently measure 200 lookup MISSES — which is fast,
+				// and proves nothing about the path it was written to police.
+				assert.equal(resolved.display.slice(0, p.resolvesTo.length), p.resolvesTo, 'the lookups HIT');
+			}
 			assert.ok(
 				inlineElapsed <= PATHOLOGY_BUDGET_MS,
 				`renderInline took ${inlineElapsed}ms, budget ${PATHOLOGY_BUDGET_MS}ms — a ` +
