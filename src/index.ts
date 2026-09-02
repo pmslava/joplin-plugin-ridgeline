@@ -190,6 +190,10 @@ async function resolveLineFromAnchor(anchor: string): Promise<number | null> {
 	try {
 		const note = await joplin.workspace.selectedNote();
 		if (!note || typeof note.body !== 'string') return null;
+		// An image-only heading legitimately slugs to '' (Joplin renders <h1 id="">), so this find() can
+		// look for an empty anchor — but it never does: handleJump below gates BOTH scrollToHash and
+		// this resolution on a truthy anchor, so an empty anchor is simply un-jumpable and can never
+		// mis-resolve onto the first empty-slug heading.
 		const match = parseHeadings(note.body).find((h) => h.slug === anchor);
 		return match ? match.line : null;
 	} catch (error) {

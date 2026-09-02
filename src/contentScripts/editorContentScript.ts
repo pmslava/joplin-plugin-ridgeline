@@ -456,9 +456,13 @@ class EditorStrip {
 			bar.setAttribute('data-level', String(heading.level));
 			bar.setAttribute('data-line', String(heading.line));
 			bar.setAttribute('data-anchor', heading.slug);
+			// heading.text is DISPLAY text now (issue #1): the heading as a reader sees it, not the raw
+			// Markdown. This attribute is also the E2E observability channel (e2e/helpers.ts reads it for
+			// the current heading), so it and the viewer bar's data-text are guaranteed comparable.
 			bar.setAttribute('data-text', heading.text);
 			// Legacy-compatible testid so the click-to-jump E2E keeps addressing the bar.
 			bar.setAttribute('data-testid', `ridgeline-editor-tick-${index}`);
+			// The native tooltip on a 3-5px bar — the first surface issue #1 was reported against.
 			bar.title = heading.text;
 
 			const b = bar.style;
@@ -495,6 +499,8 @@ class EditorStrip {
 			row.setAttribute('data-index', String(index));
 			row.setAttribute('data-level', String(heading.level));
 			row.setAttribute('data-testid', `ridgeline-editor-row-${index}`);
+			// The hover-TOC row: the user-visible half of the issue #1 fix, delivered without touching
+			// this line — parseHeadings now hands us the resolved display text.
 			row.textContent = heading.text;
 
 			const r = row.style;
