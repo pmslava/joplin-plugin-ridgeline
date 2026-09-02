@@ -15,6 +15,7 @@
     "prepare": "npm run dist",
     "updateVersion": "webpack --env joplin-plugin-config=updateVersion",
     "test:sandbox-proxy": "node scripts/audit-sandbox-proxy.js",
+    "test:headings": "node scripts/test-headings.js",
     "setup:e2e": "bash scripts/setup-e2e.sh",
     "test:e2e": "npm run dist && npm run setup:e2e && xvfb-run -a --server-args=\"-screen 0 1920x1080x24\" playwright test"
   },

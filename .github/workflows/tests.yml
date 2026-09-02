@@ -7,10 +7,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Fast gate: audit, type-check and build the plugin. Ridgeline has no unit-harness layer (the whole
-  # plugin is exercised by the real-app E2E suite below), so the fast checks are the sandbox-proxy
-  # source audit, `tsc --noEmit`, and a full `npm run dist` that must actually emit the .jpl. This is
-  # the job the publish workflow gates on.
+  # Fast gate: audit, unit-check, type-check and build the plugin. The only unit-level harness is the
+  # heading display/slug matrix; everything else is exercised by the real-app E2E suite below. So the
+  # fast checks are the sandbox-proxy source audit, that matrix, `tsc --noEmit`, and a full
+  # `npm run dist` that must actually emit the .jpl. This is the job the publish workflow gates on —
+  # which is precisely why the matrix runs HERE and not only in the 45-minute e2e job.
   build:
     name: Type-check & build
     runs-on: ubuntu-24.04
@@ -53,6 +54,13 @@ jobs:
       # class), and no type-check or build can see it. Source-only and instant, so it runs first.
       - name: Audit the sandbox-proxy read-and-call discipline
         run: npm run test:sandbox-proxy
+      # The heading parser's contract: for a given heading line, the strip must show the text a READER
+      # sees and must compute an anchor byte-identical to the id Joplin's own renderer emits. A wrong
+      # anchor is a SILENTLY dead jump (no throw, no warning), and `tsconfig.json` excludes `e2e/`, so
+      # nothing else in this job would ever see it. Compiles straight from `src/`, so a stale build
+      # cannot fool it. A new heading construct gets a matrix row before it gets code.
+      - name: Heading display & slug matrix
+        run: npm run test:headings
       - name: Type-check
         run: npx tsc --noEmit
       - name: Build the plugin
