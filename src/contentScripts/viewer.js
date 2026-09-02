@@ -9,6 +9,12 @@
 // Crucially the DESIGN TOKENS are NOT duplicated here — they are shipped by the coordinator inside
 // the getSettings response (settings.tokens), so tuning stays a one-file change in src/tokens.ts.
 // The FALLBACK_TOKENS below are only used if that round-trip fails.
+//
+// Exactly ONE rule is duplicated from the TypeScript side: the whitespace normaliser
+// `.replace(/\s+/g, ' ').trim()` (see headingDisplayText below), which must stay byte-identical to
+// `collapse()` in src/inlineText.ts or the two strips would label the same heading differently. It is
+// pinned by `npm run test:headings` (VIEWER DRIFT GUARD), which reads this file as text, and
+// behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality.
 
 (function () {
 	'use strict';
@@ -131,6 +137,62 @@
 		if (!el) return 0;
 		var w = (el.offsetWidth || 0) - (el.clientWidth || 0);
 		return w > 0 ? w : 0;
+	}
+
+	/**
+	 * The text this heading's bar and TOC row should show — what a READER sees.
+	 *
+	 * DO NOT PORT THE EDITOR'S MARKDOWN SCANNER (src/inlineText.ts) INTO THIS FILE. The next
+	 * contributor will be tempted to "unify" the two surfaces; it would be actively wrong. This side's
+	 * input is POST-render text, where the syntax has already been consumed, so a Markdown stripper
+	 * would eat literal characters the renderer deliberately shows. Two measured counter-examples:
+	 * `` # Use `[x](y)` now `` renders as the literal text "Use [x](y) now", and `# [ ] Not a task`
+	 * as "[ ] Not a task". The two surfaces agree because they resolve the SAME source by opposite
+	 * means, not because they share code.
+	 *
+	 * Three rules, each of which exists to match the editor exactly:
+	 *   V1 — normalise whitespace. Joplin's textContent preserves link-label padding and a heading's
+	 *        inner double spaces (`##  Spaced  heading  ##` → "Spaced  heading"); the editor collapses,
+	 *        so without this the current-heading comparison differs on real notes.
+	 *   V2 — walk with a skip-list instead of reading textContent wholesale. On `.joplin-editable`
+	 *        take only the hidden `.joplin-source` text and skip the rendered `.katex` subtree; skip
+	 *        `sup.footnote-ref` entirely. These are the only two constructs where raw textContent is
+	 *        genuinely wrong — measured: "Solve x^2x2x^2x2 now" and "Claim[1] here". They mirror the
+	 *        editor's math and footnote rules.
+	 *   V3 — fall back to an `<img>` alt when the walk yields "", then to "". There is deliberately NO
+	 *        `|| h.id` fallback any more: for a second image-only heading Joplin's id is the literal
+	 *        "-2", so that fallback drew a bar labelled "-2".
+	 *
+	 * Never throws: a bad DOM degrades to the plain textContent rather than killing the build pass.
+	 */
+	function headingDisplayText(h) {
+		try {
+			var out = '';
+			(function walk(node) {
+				for (var i = 0; i < node.childNodes.length; i++) {
+					var child = node.childNodes[i];
+					if (child.nodeType === 3) { out += child.nodeValue; continue; }
+					if (child.nodeType !== 1) continue;
+					var cls = child.classList;
+					// KaTeX: the hidden source, the MathML <annotation> and the visual .katex-html all
+					// concatenate into textContent. Take the source once, skip the rendering.
+					if (cls && cls.contains('joplin-editable')) {
+						var src = child.querySelector('.joplin-source');
+						if (src) { out += src.textContent || ''; continue; }
+					}
+					if (cls && cls.contains('katex')) continue;
+					if (cls && cls.contains('footnote-ref')) continue;
+					walk(child);
+				}
+			})(h);
+			out = out.replace(/\s+/g, ' ').trim();
+			if (out) return out;
+			var img = h.querySelector('img');
+			var alt = img ? (img.getAttribute('alt') || '') : '';
+			return alt.replace(/\s+/g, ' ').trim();
+		} catch (e) {
+			return (h.textContent || '').replace(/\s+/g, ' ').trim();
+		}
 	}
 
 	function headingElements() {
@@ -325,7 +387,10 @@
 
 		headings.forEach(function (h, index) {
 			var level = Number(h.tagName.substring(1));
-			var text = h.textContent || h.id;
+			// Display text, resolved the viewer's way (see headingDisplayText — and read its warning
+			// before "unifying" this with the editor's Markdown scanner). `data-anchor` below keeps
+			// using h.id: the viewer must go on sending Joplin's OWN id, never our uslug.
+			var text = headingDisplayText(h);
 
 			var bar = document.createElement('div');
 			bar.className = 'ridgeline-bar';
