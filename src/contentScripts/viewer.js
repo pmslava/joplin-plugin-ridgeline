@@ -15,6 +15,11 @@
 // `collapse()` in src/inlineText.ts or the two strips would label the same heading differently. It is
 // pinned by `npm run test:headings` (VIEWER DRIFT GUARD), which reads this file as text, and
 // behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality.
+//
+// The strip is a NAVIGATION tool and must never appear in a document the user hands to someone else.
+// Joplin ships this asset well beyond the live note viewer — Export → PDF, File → Print and Export →
+// HTML all render the note into a STANDALONE page that carries these same asset tags — so the file
+// guards itself: see hostAvailable() below (issue #3) and the `@media print` rule in viewer.css.
 
 (function () {
 	'use strict';
@@ -205,8 +210,37 @@
 		return out;
 	}
 
+	// ── EXPORT / PRINT GUARD (issue #3) ──────────────────────────────────────
+	//
+	// DO NOT REMOVE. Ridgeline is a MarkdownIt content script, and Joplin copies a content script's
+	// assets into far more pages than the live note viewer:
+	//
+	//   • Export → PDF and File → Print both go through InteropServiceHelper.exportNoteTo_(): the note
+	//     is exported with InteropService_Exporter_Html to a temp .html file, with every plugin asset
+	//     copied to pluginAssets/<contentScriptId>/ and injected as <link>/<script> tags. That file is
+	//     loaded into a hidden BrowserWindow and printToPDF()/print() is called on it.
+	//   • Export → HTML (file or directory) writes exactly the same standalone page, openable in any
+	//     browser — where this script would otherwise run and draw a strip over the document.
+	//
+	// So this script does run there, and without a guard it builds the strip into the printed page:
+	// issue #3, "Outline shows up in exported PDF of note". An outline is navigation; a PDF is a
+	// document.
+	//
+	// The discriminator is the HOST BRIDGE. `webviewApi` is declared by the note viewer's own
+	// index.html, as a top-level `const` in an inline <script> that runs before any plugin asset is
+	// added (so it is always there when we boot — there is no race to wait out — and it is NOT
+	// reachable as `window.webviewApi`). The exporter's standalone page has no such script, so no
+	// bridge means: this is not the live viewer. Build nothing, mount nothing, poll nothing.
+	//
+	// It is deliberately a FUNCTION consulted on the build path (build/scheduleBuild/startPolling)
+	// rather than one check at load time, so every later rebuild — a poll tick, a joplin-noteDidUpdate
+	// — honours it too. viewer.css carries an independent `@media print` rule as belt-and-braces.
+	function hostAvailable() {
+		return typeof webviewApi !== 'undefined' && !!webviewApi && typeof webviewApi.postMessage === 'function';
+	}
+
 	function fetchSettings() {
-		if (typeof webviewApi === 'undefined' || !webviewApi.postMessage) {
+		if (!hostAvailable()) {
 			return Promise.resolve();
 		}
 		return webviewApi.postMessage(VIEWER_CONTENT_SCRIPT_ID, { type: 'getSettings' })
@@ -284,6 +318,13 @@
 		var existing = document.getElementById(STRIP_ID);
 		if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 		teardown();
+
+		// Export/print guard (see hostAvailable): no bridge = this page is an exported or printed
+		// DOCUMENT, not the live viewer. Return before anything is created, appended or measured, so
+		// the page stays exactly the plain rendered note the exporter wrote. Body margins are left
+		// untouched on purpose — applyReserveMargin() below is only ever reached with a bridge, so
+		// there is never a reserve margin of ours to undo here.
+		if (!hostAvailable()) return;
 
 		var colors = computeColors();
 		var headings = headingElements();
@@ -598,6 +639,8 @@
 	}
 
 	function scheduleBuild() {
+		// Export/print guard: never even arm the debounce in an exported/printed page.
+		if (!hostAvailable()) return;
 		if (buildTimer) clearTimeout(buildTimer);
 		buildTimer = setTimeout(function () {
 			buildTimer = null;
@@ -608,6 +651,9 @@
 	// Live settings: poll the coordinator; rebuild only when something actually changed. A MarkdownIt
 	// asset has no main→iframe push channel, so polling is the update mechanism.
 	function startPolling() {
+		// Export/print guard: an exported/printed page has no coordinator to poll, and a stray interval
+		// in a hidden print BrowserWindow would keep it busy for nothing.
+		if (!hostAvailable()) return;
 		if (pollTimer) clearInterval(pollTimer);
 		pollTimer = setInterval(function () {
 			fetchSettings().then(function () {
@@ -616,7 +662,9 @@
 		}, tokens.pollMs || FALLBACK_TOKENS.pollMs);
 	}
 
-	// Rebuild on every note render (idempotent + debounced). Canonical Joplin pattern.
+	// Rebuild on every note render (idempotent + debounced). Canonical Joplin pattern. The listener is
+	// registered unconditionally; scheduleBuild() re-checks the host bridge, so an exported page that
+	// somehow fires this event still builds nothing.
 	document.addEventListener('joplin-noteDidUpdate', function () { scheduleBuild(); });
 
 	if (document.readyState === 'loading') {

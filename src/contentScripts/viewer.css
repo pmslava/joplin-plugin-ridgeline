@@ -1,8 +1,9 @@
 /* Ridgeline viewer strip — Phase 2.
  *
  * Geometry and theme-aware colours are set inline from src/contentScripts/viewer.js (derived at
- * runtime from the note surface), so this file only carries the few purely-cosmetic rules that are
- * easier as CSS: a hover highlight on TOC rows and a smooth panel fade. No palette lives here. */
+ * runtime from the note surface), so this file carries only the few rules that are easier as CSS:
+ * two purely-cosmetic ones (a hover highlight on TOC rows, a smooth bar transition) and — since
+ * issue #3 — the print-media rule below, which is NOT cosmetic. No palette lives here. */
 
 .ridgeline-viewer-strip .ridgeline-panel-row:hover {
 	background: rgba(127, 127, 127, 0.18);
@@ -10,4 +11,21 @@
 
 .ridgeline-viewer-strip .ridgeline-bar {
 	transition: height 80ms ease, background-color 80ms ease;
+}
+
+/* EXPORT / PRINT — issue #3, "Outline shows up in exported PDF of note".
+ *
+ * The strip is navigation, not content: it must never be part of a printed or exported document.
+ * The primary defence is in viewer.js (hostAvailable(): no host bridge → the strip is never built
+ * at all, which is what keeps it out of Joplin's Export → PDF / File → Print / Export → HTML pages,
+ * since those are standalone pages with no `webviewApi`). This rule is the independent second layer:
+ * it also covers a host that DOES define a bridge in a print window, or a Ctrl+P inside the live
+ * viewer. Both the id and the class are matched — viewer.js sets `id="ridgeline-viewer-strip"` and
+ * `class="ridgeline-strip ridgeline-viewer-strip"` on the same element — so neither half alone can
+ * be dropped by a future rename and silently reopen the bug. */
+@media print {
+	#ridgeline-viewer-strip,
+	.ridgeline-viewer-strip {
+		display: none !important;
+	}
 }
