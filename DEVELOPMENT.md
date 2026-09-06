@@ -169,9 +169,14 @@ touches your real Joplin profile.
     behavioural guard is the editor↔viewer row-array equality in `e2e/heading-links.spec.ts`. Do **not**
     port the Markdown scanner into `viewer.js` — its input is post-render text, where a Markdown
     stripper would eat literal characters the renderer deliberately shows (`` # Use `[x](y)` now ``
-    renders as the literal `Use [x](y) now`).
+    renders as the literal `Use [x](y) now`). `viewer.js` also carries the **export/print guard**
+    (issue #3): Joplin copies a content script's assets into the standalone HTML page it writes for
+    **Export → PDF**, **File → Print** and **Export → HTML**, so the strip — navigation, not content —
+    would otherwise be baked into every exported document. `hostAvailable()` builds nothing when there
+    is no `webviewApi` host bridge (there is none outside the live note viewer), and `viewer.css` adds
+    an independent `@media print` rule. Both layers are pinned by `e2e/export-print.spec.ts`.
   - `manifest.json` — the plugin manifest (id, version, `app_min_version`, screenshots).
-- `e2e/` — the Playwright end-to-end specs (17 spec files), plus `launch.ts`/`helpers.ts` for driving
+- `e2e/` — the Playwright end-to-end specs (18 spec files), plus `launch.ts`/`helpers.ts` for driving
   Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.
