@@ -175,8 +175,17 @@ touches your real Joplin profile.
     would otherwise be baked into every exported document. `hostAvailable()` builds nothing when there
     is no `webviewApi` host bridge (there is none outside the live note viewer), and `viewer.css` adds
     an independent `@media print` rule. Both layers are pinned by `e2e/export-print.spec.ts`.
+    It carries a second, independent **Rich Text (TinyMCE) editor guard** for the same reason. Joplin's
+    Rich Text editor loads the very same MarkdownIt assets into its editor iframe and defines a
+    `webviewApi` bridge there, so `hostAvailable()` alone is true inside it — but that document is
+    `contentEditable`, and a strip built into it is serialised straight back into the note (probed on
+    Joplin 3.7.x: one typed word wrote the outline's own row titles into the note body).
+    `insideEditorDocument()` refuses to build when the document is editable **or** the body carries
+    TinyMCE's root marker class `mce-content-body` (which also covers TinyMCE's read-only mode);
+    `stripAllowedHere()` combines both guards and is consulted on all three build paths. Pinned by
+    `e2e/rich-text-editor.spec.ts`.
   - `manifest.json` — the plugin manifest (id, version, `app_min_version`, screenshots).
-- `e2e/` — the Playwright end-to-end specs (18 spec files), plus `launch.ts`/`helpers.ts` for driving
+- `e2e/` — the Playwright end-to-end specs (19 spec files), plus `launch.ts`/`helpers.ts` for driving
   Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.
