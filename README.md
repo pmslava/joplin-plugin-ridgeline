@@ -28,7 +28,7 @@ Ridgeline draws a compact stack of thin bars down the edge of your note — one 
 - **Theme-aware.** Colours are derived from the live editor surface, so the strip looks right on light, dark, and custom themes with no palette to configure.
 - **Live settings and multi-window.** Every setting applies immediately, in every open window, without a reload.
 - **Stays out of the way.** Hide the whole strip with a keystroke, or let it disappear automatically on notes that have no headings so the text uses the full width.
-- **Navigation only — never in your output.** The strip is a way to move around a note, not part of it, so it is excluded from **Export → PDF**, **File → Print** and **Export → HTML**: an exported or printed note is the plain document, with no minimap in it.
+- **Navigation only — never in your output.** The strip is a way to move around a note, not part of it, so it is excluded from **Export → PDF**, **File → Print** and **Export → HTML**: an exported or printed note is the plain document, with no minimap in it. For the same reason it never draws inside the Rich Text editor, where the document you are looking at *is* the note itself.
 
 ## Install
 

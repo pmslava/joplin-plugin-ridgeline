@@ -16,10 +16,13 @@
 // pinned by `npm run test:headings` (VIEWER DRIFT GUARD), which reads this file as text, and
 // behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality.
 //
-// The strip is a NAVIGATION tool and must never appear in a document the user hands to someone else.
-// Joplin ships this asset well beyond the live note viewer — Export → PDF, File → Print and Export →
-// HTML all render the note into a STANDALONE page that carries these same asset tags — so the file
-// guards itself: see hostAvailable() below (issue #3) and the `@media print` rule in viewer.css.
+// The strip is a NAVIGATION tool: it belongs in the live rendered viewer, and nowhere else. Joplin
+// ships this asset well beyond that one document — Export → PDF, File → Print and Export → HTML each
+// render the note into a STANDALONE page carrying these same asset tags, and the Rich Text (TinyMCE)
+// editor injects them into its own EDITABLE iframe, where a strip would be serialised back into the
+// user's note. So the file guards itself on every build path: see stripAllowedHere() below, which
+// combines hostAvailable() (issue #3) with insideEditorDocument(), plus the `@media print` rule in
+// viewer.css.
 
 (function () {
 	'use strict';
@@ -226,17 +229,65 @@
 	// issue #3, "Outline shows up in exported PDF of note". An outline is navigation; a PDF is a
 	// document.
 	//
-	// The discriminator is the HOST BRIDGE. `webviewApi` is declared by the note viewer's own
-	// index.html, as a top-level `const` in an inline <script> that runs before any plugin asset is
-	// added (so it is always there when we boot — there is no race to wait out — and it is NOT
-	// reachable as `window.webviewApi`). The exporter's standalone page has no such script, so no
-	// bridge means: this is not the live viewer. Build nothing, mount nothing, poll nothing.
+	// The discriminator for THIS guard is the HOST BRIDGE. `webviewApi` is declared by the note
+	// viewer's own index.html, as a top-level `const` in an inline <script> that runs before any
+	// plugin asset is added (so it is always there when we boot — there is no race to wait out). The
+	// exporter's standalone page has no such script, so no bridge means: this page is a DOCUMENT, not
+	// a live surface. Build nothing, mount nothing, poll nothing.
 	//
-	// It is deliberately a FUNCTION consulted on the build path (build/scheduleBuild/startPolling)
-	// rather than one check at load time, so every later rebuild — a poll tick, a joplin-noteDidUpdate
-	// — honours it too. viewer.css carries an independent `@media print` rule as belt-and-braces.
+	// A bridge is NOT by itself proof that we are in the live viewer, though — Joplin's Rich Text
+	// editor defines one too (see the RICH TEXT EDITOR GUARD below), so the two documents that carry
+	// a bridge are told apart by a second, independent predicate. Nor is HOW the bridge is defined a
+	// usable discriminator: the viewer's is a scope-local `const` and TinyMCE's is a window property,
+	// but a plain `window.webviewApi` must keep building a strip (e2e/export-print.spec.ts's positive
+	// control defines exactly that, on purpose).
+	//
+	// Both predicates are deliberately FUNCTIONS consulted on the build path
+	// (build/scheduleBuild/startPolling) rather than one check at load time, so every later rebuild —
+	// a poll tick, a joplin-noteDidUpdate — honours them too. viewer.css carries an independent
+	// `@media print` rule as belt-and-braces.
 	function hostAvailable() {
 		return typeof webviewApi !== 'undefined' && !!webviewApi && typeof webviewApi.postMessage === 'function';
+	}
+
+	// ── RICH TEXT EDITOR GUARD (TinyMCE) ─────────────────────────────────────
+	//
+	// DO NOT REMOVE. Joplin's Rich Text editor runs this very file. TinyMCE's loadDocumentAssets()
+	// appends every MarkdownIt content-script asset into the EDITOR IFRAME's head — <link> for our
+	// css, <script class="jop-tinymce-js"> for this script — after rendering the note and setting it
+	// as the editor's content, and its useWebViewApi() hook defines `webviewApi.postMessage` on that
+	// iframe's window. So hostAvailable() is TRUE there, the content keeps the renderer's heading ids,
+	// and every precondition this script builds on is satisfied.
+	//
+	// But that document is EDITABLE, and anything in it is note content. Probed against Joplin 3.7.x
+	// on 2026-09-06: the strip WAS built into the contentEditable body (44×671 at 0,0),
+	// `tinymce.activeEditor.getContent()` carried its markup, and after a single typed word Joplin's
+	// HTML→Markdown save had written the outline's own row titles into the note — the first heading
+	// then appeared TWICE in the Markdown editor. Ridgeline targets the Markdown editor (its
+	// CodeMirror content script) and the rendered viewer; the Rich Text editor has never been a
+	// target and must be left untouched.
+	//
+	// Two reasons, either sufficient:
+	//   (a) the document is EDITABLE — the generic, future-proof one. A navigation strip must never
+	//       live inside content the host serialises back into the user's note, whatever built it.
+	//   (b) the body carries TinyMCE's root marker class `mce-content-body`, which TinyMCE sets in
+	//       every version. This is what covers TinyMCE's READ-ONLY mode (Joplin calls
+	//       editor.mode.set('readonly') for read-only notes): the body is then NOT contentEditable,
+	//       yet the document is still the Rich Text editor and Joplin still injects our assets into it.
+	// Joplin's own `jop-tinymce` body class and `jop-tinymce-js` script class corroborate the
+	// diagnosis but are NOT the check — they are Joplin's private naming, not TinyMCE's contract.
+	// `window.frameElement` is not used either: reading it can throw across origins.
+	function insideEditorDocument() {
+		var body = document.body;
+		if (!body) return false;
+		if (body.isContentEditable) return true;
+		if (document.designMode === 'on') return true;
+		return !!(body.classList && body.classList.contains('mce-content-body'));
+	}
+
+	// The one question every build path asks: may a strip exist in THIS document at all?
+	function stripAllowedHere() {
+		return hostAvailable() && !insideEditorDocument();
 	}
 
 	function fetchSettings() {
@@ -319,12 +370,14 @@
 		if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
 		teardown();
 
-		// Export/print guard (see hostAvailable): no bridge = this page is an exported or printed
-		// DOCUMENT, not the live viewer. Return before anything is created, appended or measured, so
-		// the page stays exactly the plain rendered note the exporter wrote. Body margins are left
-		// untouched on purpose — applyReserveMargin() below is only ever reached with a bridge, so
-		// there is never a reserve margin of ours to undo here.
-		if (!hostAvailable()) return;
+		// The guards (see stripAllowedHere): no bridge = this page is an exported or printed DOCUMENT;
+		// an editable/TinyMCE body = this is the Rich Text editor. Either way, return before anything
+		// is created, appended or measured, so the document stays exactly what its host wrote. Body
+		// margins are left untouched on purpose — applyReserveMargin() below is only ever reached in
+		// the live viewer, so there is never a reserve margin of ours to undo here. Note the ordering:
+		// the teardown above still runs, so a rebuild that newly lands in a guarded document REMOVES
+		// any strip instead of leaving it behind.
+		if (!stripAllowedHere()) return;
 
 		var colors = computeColors();
 		var headings = headingElements();
@@ -639,8 +692,8 @@
 	}
 
 	function scheduleBuild() {
-		// Export/print guard: never even arm the debounce in an exported/printed page.
-		if (!hostAvailable()) return;
+		// Guards: never even arm the debounce in an exported/printed page or the Rich Text editor.
+		if (!stripAllowedHere()) return;
 		if (buildTimer) clearTimeout(buildTimer);
 		buildTimer = setTimeout(function () {
 			buildTimer = null;
@@ -651,9 +704,10 @@
 	// Live settings: poll the coordinator; rebuild only when something actually changed. A MarkdownIt
 	// asset has no main→iframe push channel, so polling is the update mechanism.
 	function startPolling() {
-		// Export/print guard: an exported/printed page has no coordinator to poll, and a stray interval
-		// in a hidden print BrowserWindow would keep it busy for nothing.
-		if (!hostAvailable()) return;
+		// Guards: an exported/printed page has no coordinator to poll (and a stray interval in a hidden
+		// print BrowserWindow would keep it busy for nothing), and in the Rich Text editor a poll tick
+		// would be a second route back into build().
+		if (!stripAllowedHere()) return;
 		if (pollTimer) clearInterval(pollTimer);
 		pollTimer = setInterval(function () {
 			fetchSettings().then(function () {
@@ -663,8 +717,8 @@
 	}
 
 	// Rebuild on every note render (idempotent + debounced). Canonical Joplin pattern. The listener is
-	// registered unconditionally; scheduleBuild() re-checks the host bridge, so an exported page that
-	// somehow fires this event still builds nothing.
+	// registered unconditionally; scheduleBuild() re-checks the guards, so an exported page — or the
+	// Rich Text editor, which fires this event on every note render — still builds nothing.
 	document.addEventListener('joplin-noteDidUpdate', function () { scheduleBuild(); });
 
 	if (document.readyState === 'loading') {

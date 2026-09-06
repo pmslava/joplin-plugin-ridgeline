@@ -22,7 +22,9 @@
  * it also covers a host that DOES define a bridge in a print window, or a Ctrl+P inside the live
  * viewer. Both the id and the class are matched — viewer.js sets `id="ridgeline-viewer-strip"` and
  * `class="ridgeline-strip ridgeline-viewer-strip"` on the same element — so neither half alone can
- * be dropped by a future rename and silently reopen the bug. */
+ * be dropped by a future rename and silently reopen the bug. (viewer.js carries a SECOND, unrelated
+ * guard — insideEditorDocument() — for the Rich Text editor, which does define a bridge; nothing
+ * here needs to change for it, since that document is never printed through this stylesheet.) */
 @media print {
 	#ridgeline-viewer-strip,
 	.ridgeline-viewer-strip {
