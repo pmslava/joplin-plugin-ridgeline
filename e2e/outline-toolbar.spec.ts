@@ -502,7 +502,7 @@ test.describe('Outline toolbar OFF: width, pin and make-room still work', () => 
 
   // Contract A(1) — with `outlineToolbar` off the outline is exactly what it is today: hover opens it,
   // it lists every heading, and it carries NO toolbar row on either surface. The width percent is a
-  // separate setting, so the seeded 20% must shape this toolbar-less outline all the same.
+  // separate setting, so the seeded 30% must shape this toolbar-less outline all the same.
   test('A1: with the setting off, the hover outline has no toolbar but honours the width (editor and viewer)', async () => {
     const { win } = joplin;
 
@@ -513,7 +513,7 @@ test.describe('Outline toolbar OFF: width, pin and make-room still work', () => 
     // Nothing claims to be pinned either.
     expect(await win.locator(EDITOR_STRIP).getAttribute('data-pinned')).not.toBe('true');
 
-    // The seeded 20% is published (and floored at 140px) and caps this toolbar-less hover outline.
+    // The seeded 30% is published (and floored at 140px) and caps this toolbar-less hover outline.
     await expectEditorOutlineWidth(win, LAUNCH_A_WIDTH_PERCENT);
     await expectHoverPanelWithinCap(win);
 
@@ -557,7 +557,7 @@ test.describe('Outline toolbar OFF: width, pin and make-room still work', () => 
     await expect(strip).toHaveAttribute('data-pinned', 'true');
     await expect(strip).toHaveAttribute('data-expanded', 'true');
 
-    // Pinned = the full height of the pane, and still content-fit within the seeded 20% cap.
+    // Pinned = the full height of the pane, and still content-fit within the seeded 30% cap.
     const paneH = await editorPaneHeight(win);
     expect(paneH, 'editor pane height measured').toBeGreaterThan(0);
     await expect
