@@ -55,17 +55,37 @@ import {
 // keeps the active heading stable across sub-pixel layout jitter.
 const TOP_EDGE_TOLERANCE_PX = 4;
 
-// Issue #2: the two heading-depth labels the outline toolbar shows. The short one is the Headings
-// button's own text ("H1" alone reads better than "H1–H1"); the long one labels each choice in its
-// popover and matches the wording of the "Maximum heading depth" setting's options, so the same range
-// is named the same way wherever the user meets it. Mirrored in viewer.js.
-function depthLabelShort(maxDepth: number): string {
-	return maxDepth <= 1 ? 'H1' : `H1–H${maxDepth}`;
+// Issue #2 — the outline toolbar's fixed geometry. Every button is the SAME height and the row never
+// wraps, so the three of them always read as one control: a 22px-high row of 22px-high buttons, the Pin
+// a 22×22 square. The two numbers below are what toolbarRowWidthPx() adds to the buttons' own widths to
+// get the width the row needs on one line (its floor for the outline).
+const TOOLBAR_BUTTON_PX = 22;
+const TOOLBAR_PADDING_X_PX = 6;
+const TOOLBAR_GAP_PX = 6;
+
+// Issue #2: the heading-depth label the toolbar shows. NUMBERS ONLY — the button's icon already draws
+// an H, so "H1–H6" beside it would say H twice. Used for the Headings button's own text and for each
+// choice in its popover, so the same range is named the same way wherever the user meets it. The full
+// wording lives in the button's tooltip (depthTitle). Mirrored in viewer.js.
+function depthRangeLabel(depth: number): string {
+	return depth <= 1 ? '1' : `1–${depth}`;
 }
 
-function depthLabelLong(depth: number): string {
-	return depth <= 1 ? 'H1 only' : `H1–H${depth}`;
+function depthTitle(depth: number): string {
+	return depth <= 1 ? 'Headings shown: H1' : `Headings shown: H1–H${depth}`;
 }
+
+// Issue #2 — the toolbar's icons, from Lucide (https://lucide.dev, ISC licence): `move-horizontal` for
+// Width, `heading` for Headings, `pin` for Pin. Their path data is copied verbatim and drawn on Lucide's
+// own canvas (24×24 viewBox, no fill, currentColor stroke, width 2, round caps and joins) at a 14px box,
+// so they carry that library's optical weight rather than a hand-drawn approximation. The same three
+// strings are in viewer.js — keep them in sync.
+const ICON_WIDTH = ['m18 8 4 4-4 4', 'M2 12h20', 'm6 8-4 4 4 4'];
+const ICON_HEADINGS = ['M6 12h12', 'M6 20V4', 'M18 20V4'];
+const ICON_PIN = [
+	'M12 17v5',
+	'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z',
+];
 
 interface Rgb {
 	r: number;
@@ -146,10 +166,12 @@ class EditorStrip {
 	private popover: HTMLDivElement | null = null;
 	private popoverFor: 'width' | 'headings' | null = null;
 	private widthInput: HTMLInputElement | null = null;
-	// The last width/pin state written to the panel, so the per-frame reposition only touches the DOM
-	// when the resolved px (or the pinned state) actually changed.
+	// The last cap/floor written to the panel, so the per-frame reposition only touches the DOM when one
+	// of them actually changed; and the last measured single-row width of the toolbar, which is 0 while
+	// the panel is hidden and so has to be remembered.
 	private lastOutlineWidth = -1;
-	private lastOutlineWidthPinned = false;
+	private lastOutlineFloor = -1;
+	private toolbarRowWidth = 0;
 	// Whether the PINNED layout is currently applied, so unpinning is detected as a transition (a plain
 	// settings push while unpinned must never close an outline the pointer is holding open).
 	private pinnedApplied = false;
@@ -343,6 +365,10 @@ class EditorStrip {
 			this.expanded = true;
 			this.panel.style.display = 'block';
 			this.container.setAttribute('data-expanded', 'true');
+			// Measurable at last (see expand): re-apply the floor, then re-reserve the room from the width
+			// the outline actually renders at.
+			this.applyOutlineWidth(true);
+			this.onGeometry();
 			if (this.activeIndex >= 0 && this.rows[this.activeIndex]) {
 				this.rows[this.activeIndex].scrollIntoView({ block: 'nearest' });
 			}
@@ -470,14 +496,6 @@ class EditorStrip {
 		this.stylePanelShell();
 	}
 
-	// The longest panel width we allow BEFORE the toolbar exists: a hard token cap, also limited to a
-	// fraction of the pane width. Still the whole story whenever the toolbar is off.
-	private panelMaxWidthPx(): number {
-		const paneWidth = this.view.scrollDOM.clientWidth || 0;
-		const fractionCap = paneWidth > 0 ? Math.floor(paneWidth * this.tokens.panelMaxWidthFraction) : this.tokens.panelMaxWidth;
-		return Math.max(this.tokens.outlineMinWidthPx, Math.min(this.tokens.panelMaxWidth, fractionCap));
-	}
-
 	// ── Issue #2: the three effective-state predicates, from the ONE resolver in common.ts ──
 	private toolbarOn(): boolean {
 		return outlineToolbarOn(this.settings);
@@ -487,9 +505,10 @@ class EditorStrip {
 		return outlinePinnedOn(this.settings);
 	}
 
-	// The outline's resolved width in px for the CURRENT pane (recomputed, never cached across a
-	// resize): a percent of the pane, floored at outlineMinWidthPx and capped at nine tenths of it.
-	private outlineWidth(): number {
+	// The outline's CAP in px for the current pane: the width percent, floored at outlineMinWidthPx and
+	// limited to nine tenths of the pane. Recomputed, never cached across a resize. This replaced the old
+	// fixed 420px / two-thirds cap outright, so the setting governs the width in every state.
+	private outlineCapPx(): number {
 		return outlineWidthPx(
 			this.view.scrollDOM.clientWidth || 0,
 			this.settings.outlineWidthPercent,
@@ -497,40 +516,68 @@ class EditorStrip {
 		);
 	}
 
-	// Size the panel, and publish the resolved px on the container as `data-outline-width` (which is
-	// reported in every state, pinned or not, so the surfaces and the E2E can read one number).
+	// The width the toolbar row needs to keep its three buttons on ONE line — it must never wrap, so
+	// this is the outline's floor whenever a toolbar is drawn.
 	//
-	// Three sizings, and only the middle one is new:
-	//  - toolbar OFF        → exactly today's content-fit sizing, untouched (the regression contract).
-	//  - toolbar ON, hover  → still content-fit ("a hovered outline that does not need the width does
-	//                         not use it"): the percent only REPLACES the old cap as the max-width.
-	//  - PINNED             → an exactly-outlineWidthPx docked panel; the room made for it is that wide.
+	// Summed from the buttons' own intrinsic widths plus the row's gaps and padding, NOT read off the
+	// row's scrollWidth: the row is full-bleed, so its scrollWidth is the panel's own width whenever the
+	// panel is the wider of the two, and using it would ratchet the floor up and never let it back down.
+	// Everything measures 0 while the panel is display:none, so the last good measurement is cached and
+	// re-taken whenever the panel is visible (expand, pin, render).
+	private toolbarRowWidthPx(): number {
+		const bar = this.toolbar;
+		if (!bar) return 0;
+		const kids = bar.children;
+		let sum = 2 * TOOLBAR_PADDING_X_PX;
+		for (let i = 0; i < kids.length; i++) sum += (kids[i] as HTMLElement).offsetWidth;
+		if (kids.length > 1) sum += (kids.length - 1) * TOOLBAR_GAP_PX;
+		// > padding alone means the buttons actually measured (the panel is laid out).
+		if (sum > 2 * TOOLBAR_PADDING_X_PX) this.toolbarRowWidth = Math.ceil(sum);
+		return this.toolbarRowWidth;
+	}
+
+	// Size the outline, and publish the CAP on the container as `data-outline-width` (reported in every
+	// state, pinned or not, so both surfaces and the E2E read one number).
+	//
+	// ONE sizing rule now, pinned or hovered, toolbar or not: content-fit (`max-content`) between a
+	// floor and the cap. "It is a MAX width — don't make empty space": a pinned outline over three short
+	// headings docks narrow instead of reserving a wide empty gutter. The floor is 140px, or the
+	// toolbar's own single-row width when that is wider, so the three buttons never wrap; it is itself
+	// held to the pane width, since a floor wider than the pane would beat the cap (min-width wins over
+	// max-width) and overflow it.
 	private applyOutlineWidth(force = false): void {
-		const width = this.outlineWidth();
-		const pinned = this.isPinned();
-		if (!force && width === this.lastOutlineWidth && pinned === this.lastOutlineWidthPinned) return;
-		this.lastOutlineWidth = width;
-		this.lastOutlineWidthPinned = pinned;
-		this.container.setAttribute('data-outline-width', String(width));
+		const cap = this.outlineCapPx();
+		const paneWidth = this.view.scrollDOM.clientWidth || 0;
+		const floor = Math.min(
+			Math.max(this.tokens.outlineMinWidthPx, this.toolbarRowWidthPx()),
+			paneWidth > 0 ? paneWidth : this.tokens.outlineMinWidthPx,
+		);
+		if (!force && cap === this.lastOutlineWidth && floor === this.lastOutlineFloor) return;
+		this.lastOutlineWidth = cap;
+		this.lastOutlineFloor = floor;
+		this.container.setAttribute('data-outline-width', String(cap));
 		const p = this.panel.style;
-		if (!this.toolbarOn()) {
-			p.width = 'max-content';
-			p.minWidth = `${this.tokens.outlineMinWidthPx}px`;
-			p.maxWidth = `${this.panelMaxWidthPx()}px`;
-			return;
-		}
-		if (pinned) {
-			p.width = `${width}px`;
-			p.minWidth = `${width}px`;
-			p.maxWidth = `${width}px`;
-			return;
-		}
-		// A pane narrower than the minimum cannot honour the minimum (min-width would beat max-width and
-		// overflow the pane), so on such a pane the floor drops to the width itself — the same guard the
-		// pre-toolbar cap carried as its Math.max floor.
 		p.width = 'max-content';
-		p.minWidth = `${Math.min(width, this.tokens.outlineMinWidthPx)}px`;
-		p.maxWidth = `${width}px`;
+		p.minWidth = `${floor}px`;
+		p.maxWidth = `${cap}px`;
+	}
+
+	// The outline as it ACTUALLY renders, in px — what the room is reserved from (never the cap, or a
+	// narrow outline would sit in a wide empty gutter). 0 while it is not laid out.
+	private measuredOutlineWidthPx(): number {
+		const width = this.panel.getBoundingClientRect().width;
+		return width > 0 ? Math.ceil(width) : 0;
+	}
+
+	// The room to reserve for the pinned outline right now: its measured width plus the edge inset and a
+	// little air, or 0 when nothing is pinned / make-room is off / the pane cannot spare the text column.
+	public outlineRoom(): number {
+		if (!outlineMakeRoomOn(this.settings)) return 0;
+		return outlineRoomPx(
+			this.view.scrollDOM.clientWidth || 0,
+			this.measuredOutlineWidthPx(),
+			this.tokens,
+		);
 	}
 
 	private stylePanelShell(): void {
@@ -595,6 +642,9 @@ class EditorStrip {
 		this.renderBars();
 		this.renderPanel();
 		this.update();
+		// The rows changed, so a content-fit outline is a different width and the room reserved for it
+		// has to follow. Deferred and change-guarded by the closure (this runs inside a CM update).
+		this.onGeometry();
 	}
 
 	// Compress the inter-bar gap so a very tall stack still fits the pane; never below the token floor.
@@ -757,9 +807,10 @@ class EditorStrip {
 		});
 
 		// Issue #2: a PINNED outline stays on a note with no headings (W3 would otherwise unmount the
-		// whole strip), so it needs something to say. One placeholder row, and the toolbar above it keeps
-		// the Pin button reachable — the user can always unpin in place.
-		if (this.headings.length === 0 && this.toolbarOn()) {
+		// whole strip), so it needs something to say. One placeholder row — with the toolbar above it when
+		// there is one, so the Pin button stays reachable and the user can unpin in place; without a
+		// toolbar the pin is undone from the Settings screen or with Ctrl+Alt+P.
+		if (this.headings.length === 0 && (this.toolbarOn() || this.isPinned())) {
 			const empty = this.ownerDoc.createElement('div');
 			empty.className = 'ridgeline-panel-empty';
 			empty.setAttribute('data-testid', 'ridgeline-editor-empty');
@@ -777,6 +828,9 @@ class EditorStrip {
 		}
 
 		if (scrollTop > 0) this.panel.scrollTop = scrollTop;
+		// The toolbar was rebuilt, so its single-row width (the outline's floor) may have changed with its
+		// labels — "100%" is wider than "33%", "1–6" than "1".
+		this.applyOutlineWidth(true);
 	}
 
 	// ── Issue #2: the outline toolbar ────────────────────────────────────
@@ -785,19 +839,26 @@ class EditorStrip {
 	// guaranteed inside the rendered-note iframe, and the viewer half of this feature must draw the same
 	// three buttons. `currentColor` makes each icon inherit the button's colour, so the theme-derived
 	// panel palette carries them with no extra work.
-	private icon(paths: string[]): SVGSVGElement {
+	private icon(paths: string[], filled = false): SVGSVGElement {
 		const NS = 'http://www.w3.org/2000/svg';
 		const svg = this.ownerDoc.createElementNS(NS, 'svg') as SVGSVGElement;
 		svg.setAttribute('viewBox', '0 0 24 24');
 		svg.setAttribute('width', '14');
 		svg.setAttribute('height', '14');
-		svg.setAttribute('fill', 'none');
+		// `filled` is the PRESSED pin: the same outline, flooded with the button's own colour, so a pinned
+		// outline reads as pinned at a glance rather than only by its background.
+		svg.setAttribute('fill', filled ? 'currentColor' : 'none');
 		svg.setAttribute('stroke', 'currentColor');
 		svg.setAttribute('stroke-width', '2');
 		svg.setAttribute('stroke-linecap', 'round');
 		svg.setAttribute('stroke-linejoin', 'round');
 		svg.setAttribute('aria-hidden', 'true');
+		// An exact integer box on the text baseline: a fractional or line-height-driven icon box is what
+		// made the three buttons come out slightly different heights.
 		svg.style.flex = '0 0 auto';
+		svg.style.width = '14px';
+		svg.style.height = '14px';
+		svg.style.verticalAlign = 'middle';
 		for (const d of paths) {
 			const path = this.ownerDoc.createElementNS(NS, 'path');
 			path.setAttribute('d', d);
@@ -818,13 +879,18 @@ class EditorStrip {
 		button.title = title;
 		if (pressed !== undefined) button.setAttribute('aria-pressed', pressed ? 'true' : 'false');
 		const b = button.style;
+		// One explicit height for every button, borders included, so Width, Headings and Pin line up
+		// exactly; the Pin (icon only) is a square of that height, set by its caller.
+		b.boxSizing = 'border-box';
+		b.height = `${TOOLBAR_BUTTON_PX}px`;
 		b.display = 'inline-flex';
 		b.alignItems = 'center';
+		b.justifyContent = 'center';
 		b.gap = '4px';
-		b.padding = '1px 5px';
+		b.padding = '0 6px';
 		b.fontFamily = 'inherit';
 		b.fontSize = `${this.tokens.panelFontPx}px`;
-		b.lineHeight = '1.4';
+		b.lineHeight = '1';
 		b.background = pressed ? this.colors.rowHover : 'transparent';
 		b.border = `1px solid ${this.colors.panelBorder}`;
 		b.borderRadius = '3px';
@@ -862,11 +928,11 @@ class EditorStrip {
 		s.zIndex = '2';
 		s.display = 'flex';
 		s.alignItems = 'center';
-		s.gap = '6px';
-		// Wrap rather than clip: a narrow outline (10% of the pane, floored at 140px) would otherwise push
-		// the Pin button out past the panel's overflow:hidden edge, where it could not be clicked.
-		s.flexWrap = 'wrap';
-		s.padding = '4px 6px';
+		s.gap = `${TOOLBAR_GAP_PX}px`;
+		// NEVER wraps: the three buttons are one control and must read as one row. The outline's floor is
+		// this row's own width (toolbarRowWidthPx), so there is always room for them on one line.
+		s.flexWrap = 'nowrap';
+		s.padding = `4px ${TOOLBAR_PADDING_X_PX}px`;
 		s.margin = `0 ${-this.tokens.panelPaddingPx}px 4px ${-this.tokens.panelPaddingPx}px`;
 		s.background = this.colors.panelBg;
 		s.borderBottom = `1px solid ${this.colors.panelBorder}`;
@@ -874,21 +940,25 @@ class EditorStrip {
 		// The rows' pointer cursor must not leak into the toolbar's background: only the buttons click.
 		s.cursor = 'default';
 
-		// WIDTH — a horizontal double arrow + the current percent.
+		// WIDTH — Lucide's move-horizontal + the current percent.
 		const width = this.toolbarButton('ridgeline-tb-width', 'ridgeline-editor-tb-width', 'Outline width');
-		width.appendChild(this.icon(['M18 8l4 4-4 4', 'M6 8l-4 4 4 4', 'M2 12h20']));
+		width.appendChild(this.icon(ICON_WIDTH));
 		width.appendChild(this.ownerDoc.createTextNode(`${this.settings.outlineWidthPercent}%`));
 		this.onToolbarClick(width, () => this.togglePopover('width'));
 		bar.appendChild(width);
 
-		// HEADINGS — an H + the current depth range.
-		const headings = this.toolbarButton('ridgeline-tb-headings', 'ridgeline-editor-tb-headings', 'Headings shown');
-		headings.appendChild(this.icon(['M6 4v16', 'M18 4v16', 'M6 12h12']));
-		headings.appendChild(this.ownerDoc.createTextNode(depthLabelShort(this.settings.maxDepth)));
+		// HEADINGS — Lucide's heading (which draws the H) + the depth range as bare numbers.
+		const headings = this.toolbarButton(
+			'ridgeline-tb-headings',
+			'ridgeline-editor-tb-headings',
+			depthTitle(this.settings.maxDepth),
+		);
+		headings.appendChild(this.icon(ICON_HEADINGS));
+		headings.appendChild(this.ownerDoc.createTextNode(depthRangeLabel(this.settings.maxDepth)));
 		this.onToolbarClick(headings, () => this.togglePopover('headings'));
 		bar.appendChild(headings);
 
-		// PIN — icon only; its pressed state is the pin itself.
+		// PIN — Lucide's pin, icon only, in a square of the shared button height; pressed, it fills.
 		const pinned = this.isPinned();
 		const pin = this.toolbarButton(
 			'ridgeline-tb-pin',
@@ -896,7 +966,9 @@ class EditorStrip {
 			pinned ? 'Unpin the outline' : 'Pin the outline open (Ctrl+Alt+P)',
 			pinned,
 		);
-		pin.appendChild(this.icon(['M9 2h6l-1 5 3 3v2H7v-2l3-3-1-5z', 'M12 12v10']));
+		pin.style.width = `${TOOLBAR_BUTTON_PX}px`;
+		pin.style.padding = '0';
+		pin.appendChild(this.icon(ICON_PIN, pinned));
 		this.onToolbarClick(pin, () => this.onSetSettings({ outlinePinned: !pinned }));
 		bar.appendChild(pin);
 
@@ -1021,7 +1093,7 @@ class EditorStrip {
 				depth === this.settings.maxDepth,
 			);
 			button.setAttribute('data-depth', String(depth));
-			button.textContent = depthLabelLong(depth);
+			button.textContent = depthRangeLabel(depth);
 			this.onToolbarClick(button, () => {
 				this.closePopover();
 				if (depth !== this.settings.maxDepth) this.onSetSettings({ maxDepth: depth });
@@ -1226,6 +1298,9 @@ class EditorStrip {
 		this.expanded = true;
 		this.panel.style.display = 'block';
 		this.container.setAttribute('data-expanded', 'true');
+		// Now that the panel is laid out, the toolbar row can finally be measured (everything is 0 while
+		// it is display:none), so the outline's floor is right from the first frame it is visible.
+		this.applyOutlineWidth(true);
 		// Bring the current row into view within the panel.
 		if (this.activeIndex >= 0 && this.rows[this.activeIndex]) {
 			this.rows[this.activeIndex].scrollIntoView({ block: 'nearest' });
@@ -1263,6 +1338,8 @@ class EditorStrip {
 		// Issue #2: last, because it wants the freshly rendered rows (to scroll the current one into view)
 		// and the freshly styled panel.
 		this.syncPinned();
+		// New settings can change the cap, the floor and therefore the measured width the room comes from.
+		this.onGeometry();
 	}
 
 	public destroy(): void {
@@ -1375,12 +1452,14 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			return true;
 		};
 
-		// Issue #2 — the OUTLINE ROOM in px for the pane as it is right now, or 0 when no room is to be
-		// made (make-room off, nothing pinned, nothing shown, or a pane too narrow to leave a usable text
-		// column). Recomputed rather than stored, because it is a percent of a pane that keeps moving.
+		// Issue #2 — the OUTLINE ROOM in px right now, or 0 when no room is to be made (make-room off,
+		// nothing pinned, nothing shown, or a pane too narrow to leave a usable text column). MEASURED off
+		// the mounted outline rather than computed from the cap: the outline is content-fit, so the room
+		// is only as wide as it actually renders, and it is re-measured after every render, settings apply
+		// and pane resize.
 		const roomPxNow = (): number => {
-			if (!outlineMakeRoomOn(currentSettings) || !shouldShow()) return 0;
-			return outlineRoomPx(view.scrollDOM.clientWidth || 0, currentSettings.outlineWidthPercent, currentTokens);
+			if (!shouldShow() || !strip) return 0;
+			return strip.outlineRoom();
 		};
 
 		// The room px currently baked into the compartment, so a resize only dispatches when the number
@@ -1466,6 +1545,9 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			reconfigureReserve();
 			syncStrip();
 			lastVisible = shouldShow();
+			// syncStrip may have just mounted or re-rendered the outline, so its MEASURED width — which the
+			// room is reserved from — can be new. Deferred, and a no-op unless the px really changed.
+			scheduleRoomSync();
 		};
 
 		// A signature of the last-applied settings+tokens, so the poll (below) only re-applies on a real

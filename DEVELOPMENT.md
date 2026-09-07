@@ -170,11 +170,16 @@ touches your real Joplin profile.
     sizing, colour opacity, and the outline's geometry: its min width, its max fraction of the pane, the
     text column that must survive beside a pinned one, the air between the text and its border). Change
     a number here, rebuild, and both surfaces update. It also holds the two width resolvers —
-    `outlineWidthPx()` (percent of the pane, clamped) and `outlineRoomPx()` (that width plus the edge
-    inset and the air, or 0 when the pane is too narrow) — mirrored in `viewer.js`.
-  - `common.ts` — shared constants, message types and the ONE effective-state resolver
-    (`outlineToolbarOn` / `outlinePinnedOn` / `outlineMakeRoomOn`), so both surfaces decide "toolbar on /
-    pinned / making room" the same way. Note the two DISTINCT margins it names: the **minimap margin**
+    `outlineWidthPx()` (the CAP: percent of the pane, clamped) and `outlineRoomPx()` (the outline's
+    MEASURED width plus the edge inset and the air, or 0 when the pane is too narrow) — mirrored in
+    `viewer.js`.
+  - `common.ts` — shared constants, message types and the ONE effective-state resolver, so both surfaces
+    decide "toolbar row drawn / pinned / making room" the same way: `outlineToolbarOn = showMinimap &&
+    outlineToolbar`, `outlinePinnedOn = showMinimap && outlinePinned`, `outlineMakeRoomOn =
+    outlinePinnedOn && outlineMakeRoom`. The three OUTLINE settings are **independent of the toolbar** —
+    it is only a convenient place to change them, never a precondition: the pin, the maximum width and
+    make-room all work from the Settings screen (and `Ctrl+Alt+P`) with the toolbar off, and a pinned
+    outline with no toolbar simply shows its rows. Only `showMinimap` still gates everything. Note the two DISTINCT margins it names: the **minimap margin**
     (`editorMode`/`viewerMode` = `reserve`) is the thin one that only clears the bars, while the
     **outline room** is the wide one a *pinned* outline gets from `outlineMakeRoom`. The room supersedes
     the thin margin rather than adding to it — the pinned outline covers the bars anyway. User-facing
@@ -192,22 +197,34 @@ touches your real Joplin profile.
     for good: once the pointer is out of the note iframe no further mousemove arrives there and its
     Escape handler is bound to that window, so nothing was left to close it until the next rebuild. The two implementations are deliberate mirrors, not shared
     code: identical class names, behaviour and layout, with the `data-testid` prefixed per surface. With
-    `outlineToolbar` off every path in both files behaves as it did before the toolbar existed —
-    that regression contract is what keeps the older specs green — **identical except for four
-    deliberate refinements that apply whether or not the toolbar is on**, listed here so the claim is
-    not read as broader than it is. (1) `renderPanel` carries the panel's `scrollTop` across a rebuild:
-    a pinned outline is open *while* the user types and every doc edit re-renders its rows, so without
-    it a long outline snapped back to the top on every keystroke. (2) The editor's `reposition()` now
-    re-applies the panel's width cap, so the legacy `panelMaxWidthFraction` cap follows a pane resize
-    instead of keeping the width it was built with. (3) The viewer registers a `resize` listener per
-    build (torn down with the strip), because the outline's width and room are a percentage of a pane
-    that moves. (4) Both containers are stamped with `data-expanded` / `data-pinned` at mount/build
-    rather than only on the first `expand()`/`collapse()`, so a reader can never mistake "not yet
-    touched" for "closed" — the viewer rebuilds its container wholesale, which made that difference
-    observable. Layout notes: pinned, the panel is
+    `outlineToolbar` off the outline still behaves as it did before the toolbar existed — that
+    regression contract is what keeps the older specs green — **except for five deliberate changes that
+    apply whether or not the toolbar is on**, listed here so the claim is not read as broader than it is.
+    (1) The outline's width CAP is now the `outlineWidthPercent` setting (default 33 % of the pane,
+    floored at `outlineMinWidthPx`), replacing the old fixed 420 px / two-thirds-of-the-pane cap
+    outright — the `panelMaxWidth` and `panelMaxWidthFraction` tokens are gone, so there is one width
+    rule rather than two, and on a wide pane a long-heading outline now stops narrower than it used to.
+    (2) `renderPanel` carries the panel's `scrollTop` across a rebuild: a pinned outline is open *while*
+    the user types and every doc edit re-renders its rows, so without it a long outline snapped back to
+    the top on every keystroke. (3) The editor's `reposition()` re-applies that cap, so it follows a pane
+    resize instead of keeping the width it was built with. (4) The viewer registers a `resize` listener
+    per build (torn down with the strip), because the cap and the room are a percentage of a pane that
+    moves. (5) Both containers are stamped with `data-expanded` / `data-pinned` at mount/build rather
+    than only on the first `expand()`/`collapse()`, so a reader can never mistake "not yet touched" for
+    "closed" — the viewer rebuilds its container wholesale, which made that difference observable. Layout notes: the outline is ALWAYS content-fit —
+    `width: max-content` between a floor and the cap, pinned or hovered, toolbar or not ("it is a max
+    width, don't make empty space"), so the ROOM reserved for a pinned one is its **measured**
+    `getBoundingClientRect().width`, re-measured after every render, settings apply and pane resize, and
+    never the cap. The floor is `outlineMinWidthPx` or the toolbar row's own single-line width, whichever
+    is larger (that row is `flex-wrap: nowrap` and must never break), summed from the buttons' intrinsic
+    widths rather than read off the row's `scrollWidth`, which is the panel's own width whenever the
+    panel is wider and would ratchet the floor up for good. Pinned, the panel is
     `display:block; top:0; height:100%` of the container (which already spans the pane on both surfaces),
     the toolbar is `position:sticky` and full-bleed (negative side margins, the panel dropping its top
-    padding), and the rows scroll under it; a pinned outline on a heading-less note keeps the toolbar and
+    padding), and the rows scroll under it; every toolbar button is one shared height (22 px, the Pin a
+    square of it) and its icons are Lucide's `move-horizontal` / `heading` / `pin` (ISC), inlined as SVG
+    path data in both scripts because Joplin's icon font is chrome and is not guaranteed in the viewer
+    iframe; a pinned outline on a heading-less note keeps the toolbar and
     shows a single `.ridgeline-panel-empty` row so it can be unpinned in place. The editor's outline room
     lives in the reserve `Compartment`, and reconfiguring it DISPATCHES — so, exactly like `applyVisibility`,
     it is deferred out of any CodeMirror update (and out of the ResizeObserver callback) with a

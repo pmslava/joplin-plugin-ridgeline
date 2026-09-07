@@ -34,9 +34,8 @@ export const TOGGLE_MINIMAP_COMMAND = 'ridgeline.toggleMinimap';
 export const TOGGLE_HIDE_WHEN_EMPTY_COMMAND = 'ridgeline.toggleHideWhenEmpty';
 
 // Outline toolbar: plugin command (Tools → Ridgeline submenu + accelerator Ctrl+Alt+P) that flips the
-// "Pin the outline open" setting. Pinning while the toolbar is OFF also turns the toolbar on — a pinned
-// outline with no toolbar row would be invisible AND impossible to unpin with the mouse. Unpinning
-// leaves the toolbar exactly as it is (see index.ts).
+// "Pin the outline open" setting, and nothing else. The pin does not need the toolbar — a pinned
+// outline with no toolbar simply shows its rows, and the same accelerator unpins it again.
 export const TOGGLE_PIN_COMMAND = 'ridgeline.togglePin';
 
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
@@ -76,11 +75,11 @@ export const HOVER_OPEN_DELAY_MAX = 1000;
 //                           the text clear of the BARS only.
 //   outline room          = the NEW wide margin that keeps the text clear of a PINNED outline.
 //
-// The toolbar is the outline's first row (Width / Headings / Pin). It is OFF by default, and the three
-// settings below it are meaningless while it is off — with outlineToolbar false every code path on both
-// surfaces behaves exactly as it did before this feature existed (the regression contract).
+// The toolbar is the outline's first row (Width / Headings / Pin). It is OFF by default; the three
+// settings below it work with or without it, from the Settings screen, the toolbar or Ctrl+Alt+P.
 export const SETTING_OUTLINE_TOOLBAR = 'outlineToolbar';
-// Outline width as a share of the pane, in percent. Shapes the hover outline AND the pinned one.
+// The outline's MAXIMUM width as a share of the pane, in percent. The outline is content-fit within
+// it, hovered or pinned.
 export const SETTING_OUTLINE_WIDTH_PERCENT = 'outlineWidthPercent';
 // Keep the outline open at full pane height until unpinned (persisted, so a pin survives a restart).
 export const SETTING_OUTLINE_PINNED = 'outlinePinned';
@@ -108,10 +107,11 @@ export interface RidgelineSettings {
 	// W3: when true (default), a note with 0 headings hides the strip AND drops the reserve margin in
 	// both surfaces / every window. false = the empty strip + margin are kept (pre-W3 behaviour).
 	hideWhenEmpty: boolean;
-	// Issue #2: show the outline's first row (Width / Headings / Pin). OFF by default; the three fields
-	// below do nothing while it is off.
+	// Issue #2: show the outline's first row (Width / Headings / Pin). OFF by default. The three fields
+	// below are independent of it — the toolbar only offers a second way to change them.
 	outlineToolbar: boolean;
-	// Outline width as a percent of the pane (OUTLINE_WIDTH_MIN..MAX).
+	// The outline's MAXIMUM width as a percent of the pane (OUTLINE_WIDTH_MIN..MAX); it is content-fit
+	// within that cap.
 	outlineWidthPercent: number;
 	// Keep the outline open at the full pane height until unpinned.
 	outlinePinned: boolean;
@@ -134,18 +134,22 @@ export const DEFAULT_SETTINGS: RidgelineSettings = {
 
 // ── THE ONE RESOLVER (both surfaces must agree) ──────────────────────────
 //
-// Mirrored verbatim in viewer.js (plain JS, no imports). These three predicates fold the master
-// showMinimap switch into the toolbar's own settings, so there is exactly one place where "is the
-// toolbar on / is it pinned / is room being made" is decided:
+// Mirrored verbatim in viewer.js (plain JS, no imports). Exactly one place decides "is the toolbar row
+// drawn / is the outline pinned / is room being made":
 //   toolbarOn = showMinimap && outlineToolbar
-//   pinned    = toolbarOn   && outlinePinned
+//   pinned    = showMinimap && outlinePinned
 //   makeRoom  = pinned      && outlineMakeRoom
+//
+// The three OUTLINE settings are INDEPENDENT of the toolbar: the toolbar is only a convenient place to
+// change them, never a precondition for them. Pin, width and make-room all work from the Settings
+// screen (and Ctrl+Alt+P) with the toolbar off — a pinned outline with no toolbar simply shows its
+// rows. Only the master showMinimap switch still gates everything, pinned or not.
 export function outlineToolbarOn(settings: RidgelineSettings): boolean {
 	return settings.showMinimap && settings.outlineToolbar;
 }
 
 export function outlinePinnedOn(settings: RidgelineSettings): boolean {
-	return outlineToolbarOn(settings) && settings.outlinePinned;
+	return settings.showMinimap && settings.outlinePinned;
 }
 
 export function outlineMakeRoomOn(settings: RidgelineSettings): boolean {

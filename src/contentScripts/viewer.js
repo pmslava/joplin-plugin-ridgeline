@@ -47,8 +47,6 @@
 		panelIndentPx: 12,
 		panelPaddingPx: 8,
 		panelRowPaddingPx: 3,
-		panelMaxWidth: 420,
-		panelMaxWidthFraction: 0.66,
 		panelGapPx: 0,
 		hoverGraceMs: 200,
 		hoverOpenDelayMs: 300,
@@ -95,6 +93,10 @@
 	// toolbar" apart from every other rebuild (a poll tick, a note render), which is the only case the
 	// carry-open below may act on — see pointerHoldsOutlineOpen.
 	var carryOpenOnNextBuild = false;
+	// The toolbar row's last measured single-line width — the outline's floor whenever a toolbar is
+	// drawn. Everything measures 0 while the panel is display:none, so the last good value is kept, and
+	// module-level because the strip is rebuilt from scratch on every settings change.
+	var toolbarRowWidth = 0;
 
 	function tokenLength(level) {
 		var lengths = tokens.levelLengths || FALLBACK_TOKENS.levelLengths;
@@ -177,33 +179,30 @@
 		return el ? (el.clientWidth || 0) : 0;
 	}
 
-	function panelMaxWidthPx() {
-		var pw = paneWidth();
-		var frac = tokens.panelMaxWidthFraction || FALLBACK_TOKENS.panelMaxWidthFraction;
-		var fractionCap = pw > 0 ? Math.floor(pw * frac) : tokens.panelMaxWidth;
-		return Math.max(token('outlineMinWidthPx'), Math.min(tokens.panelMaxWidth, fractionCap));
-	}
-
 	// ── Issue #2: THE ONE RESOLVER, mirrored from src/common.ts + src/tokens.ts ──
 	//
-	// toolbarOn = showMinimap && outlineToolbar; pinned = toolbarOn && outlinePinned;
-	// makeRoom  = pinned && outlineMakeRoom. The master switch still hides everything, pinned or not.
+	// toolbarOn = showMinimap && outlineToolbar; pinned = showMinimap && outlinePinned;
+	// makeRoom  = pinned && outlineMakeRoom. The three OUTLINE settings are INDEPENDENT of the toolbar,
+	// which is only a convenient place to change them: pin, width and make-room all work from the
+	// Settings screen (and Ctrl+Alt+P) with the toolbar off, and a pinned outline with no toolbar simply
+	// shows its rows. Only the master showMinimap switch still hides everything, pinned or not.
 	function toolbarOn() {
 		return settings.showMinimap && settings.outlineToolbar;
 	}
 
 	function isPinned() {
-		return toolbarOn() && settings.outlinePinned;
+		return settings.showMinimap && settings.outlinePinned;
 	}
 
 	function makeRoomOn() {
 		return isPinned() && settings.outlineMakeRoom;
 	}
 
-	// The outline's width in px for the current pane: a percent of it, floored at outlineMinWidthPx and
-	// capped at nine tenths of the pane — except on a pane narrower than the floor, which cannot honour
-	// it and simply gets the whole pane (a very narrow pane must not look surprising).
-	function outlineWidthPx() {
+	// The outline's MAXIMUM width in px for the current pane: a percent of it, floored at
+	// outlineMinWidthPx and capped at nine tenths of the pane — except on a pane narrower than the floor,
+	// which cannot honour it and simply gets the whole pane (a very narrow pane must not look
+	// surprising). The outline itself is content-fit within this; this is the ceiling, not the width.
+	function outlineCapPx() {
 		var pane = Math.round(paneWidth());
 		var min = token('outlineMinWidthPx');
 		if (!isFinite(pane) || pane <= 0) return min;
@@ -213,41 +212,75 @@
 		return Math.max(min, Math.min(wanted, cap));
 	}
 
-	// The outline ROOM: the outline's width plus the strip's edge inset and a little air, so the text
-	// stops short of the outline's border. 0 = no room — the pane is too narrow to leave a usable text
-	// column beside the outline, so the legacy minimap margin governs and the outline overlays instead.
+	// The outline as it ACTUALLY renders, in px — what the room is reserved from (never the cap, or a
+	// narrow outline would sit in a wide empty gutter). 0 while nothing is laid out.
+	function measuredOutlineWidthPx() {
+		var stripEl = document.getElementById(STRIP_ID);
+		var panelEl = stripEl ? stripEl.querySelector('.ridgeline-panel') : null;
+		if (!panelEl) return 0;
+		var rect = panelEl.getBoundingClientRect();
+		return rect && rect.width > 0 ? Math.ceil(rect.width) : 0;
+	}
+
+	// The outline ROOM: the width the outline actually renders at, plus the strip's edge inset and a
+	// little air, so the text stops short of the outline's border. 0 = no room — the pane is too narrow
+	// to leave a usable text column beside the outline, so the legacy minimap margin governs and the
+	// outline overlays instead.
 	function outlineRoomPx() {
 		var pane = Math.round(paneWidth());
-		if (!isFinite(pane) || pane <= 0) return 0;
-		var room = outlineWidthPx() + token('edgeGapPx') + token('outlineRoomGapPx');
+		var width = measuredOutlineWidthPx();
+		if (!isFinite(pane) || pane <= 0 || width <= 0) return 0;
+		var room = width + token('edgeGapPx') + token('outlineRoomGapPx');
 		if (pane - room < token('outlineMinTextPx')) return 0;
 		return room;
 	}
 
-	// Issue #2: the two heading-depth labels the toolbar shows (mirrored from editorContentScript.ts).
-	function depthLabelShort(maxDepth) {
-		return maxDepth <= 1 ? 'H1' : 'H1–H' + maxDepth;
+	// Issue #2: the heading-depth label the toolbar shows (mirrored from editorContentScript.ts).
+	// NUMBERS ONLY — the button's icon already draws an H. The full wording is in its tooltip.
+	function depthRangeLabel(depth) {
+		return depth <= 1 ? '1' : '1–' + depth;
 	}
 
-	function depthLabelLong(depth) {
-		return depth <= 1 ? 'H1 only' : 'H1–H' + depth;
+	function depthTitle(depth) {
+		return depth <= 1 ? 'Headings shown: H1' : 'Headings shown: H1–H' + depth;
 	}
 
-	// An inline SVG icon (~14px, currentColor). NOT Font Awesome: Joplin's icon font is chrome and is
-	// not guaranteed inside this iframe, so the toolbar draws its own.
-	function svgIcon(paths) {
+	// Issue #2 — the toolbar's fixed geometry, mirrored from editorContentScript.ts: one button height
+	// for all three (the Pin a square of it), a row that never wraps, and the two numbers the row's
+	// single-line width is summed from.
+	var TOOLBAR_BUTTON_PX = 22;
+	var TOOLBAR_PADDING_X_PX = 6;
+	var TOOLBAR_GAP_PX = 6;
+
+	// Issue #2 — the toolbar's icons, from Lucide (https://lucide.dev, ISC licence): `move-horizontal`
+	// for Width, `heading` for Headings, `pin` for Pin. Path data copied verbatim and drawn on Lucide's
+	// own canvas (24×24 viewBox, no fill, currentColor stroke, width 2, round caps and joins) at a 14px
+	// box. The same three strings are in editorContentScript.ts — keep them in sync.
+	var ICON_WIDTH = ['m18 8 4 4-4 4', 'M2 12h20', 'm6 8-4 4 4 4'];
+	var ICON_HEADINGS = ['M6 12h12', 'M6 20V4', 'M18 20V4'];
+	var ICON_PIN = [
+		'M12 17v5',
+		'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z',
+	];
+
+	// An inline SVG icon at an exact 14×14 box. NOT Font Awesome: Joplin's icon font is chrome and is
+	// not guaranteed inside this iframe, so the toolbar draws its own. `filled` is the PRESSED pin.
+	function svgIcon(paths, filled) {
 		var NS = 'http://www.w3.org/2000/svg';
 		var svg = document.createElementNS(NS, 'svg');
 		svg.setAttribute('viewBox', '0 0 24 24');
 		svg.setAttribute('width', '14');
 		svg.setAttribute('height', '14');
-		svg.setAttribute('fill', 'none');
+		svg.setAttribute('fill', filled ? 'currentColor' : 'none');
 		svg.setAttribute('stroke', 'currentColor');
 		svg.setAttribute('stroke-width', '2');
 		svg.setAttribute('stroke-linecap', 'round');
 		svg.setAttribute('stroke-linejoin', 'round');
 		svg.setAttribute('aria-hidden', 'true');
 		svg.style.flex = '0 0 auto';
+		svg.style.width = '14px';
+		svg.style.height = '14px';
+		svg.style.verticalAlign = 'middle';
 		for (var i = 0; i < paths.length; i++) {
 			var path = document.createElementNS(NS, 'path');
 			path.setAttribute('d', paths[i]);
@@ -266,13 +299,18 @@
 		button.title = title;
 		if (pressed !== undefined) button.setAttribute('aria-pressed', pressed ? 'true' : 'false');
 		var b = button.style;
+		// One explicit height for every button, borders included, so Width, Headings and Pin line up
+		// exactly; the Pin (icon only) is a square of that height, set by its caller.
+		b.boxSizing = 'border-box';
+		b.height = TOOLBAR_BUTTON_PX + 'px';
 		b.display = 'inline-flex';
 		b.alignItems = 'center';
+		b.justifyContent = 'center';
 		b.gap = '4px';
-		b.padding = '1px 5px';
+		b.padding = '0 6px';
 		b.fontFamily = 'inherit';
 		b.fontSize = tokens.panelFontPx + 'px';
-		b.lineHeight = '1.4';
+		b.lineHeight = '1';
 		b.background = pressed ? colors.rowHover : 'transparent';
 		b.border = '1px solid ' + colors.panelBorder;
 		b.borderRadius = '3px';
@@ -755,38 +793,46 @@
 		else { p.left = '0'; p.right = ''; }
 		el.appendChild(panel);
 
-		// Issue #2 — size the outline and reserve its room, for the pane AS IT IS NOW. Called at build
-		// time and again on every window resize, because the width is a PERCENT of a pane that moves.
+		// The width the toolbar row needs to keep its three buttons on ONE line — it must never wrap, so
+		// this is the outline's floor whenever a toolbar is drawn. Summed from the buttons' own intrinsic
+		// widths plus the row's gaps and padding, NOT read off the row's scrollWidth: the row is
+		// full-bleed, so its scrollWidth is the panel's own width whenever the panel is the wider of the
+		// two, and using it would ratchet the floor up and never let it back down.
+		function toolbarRowWidthPx() {
+			if (!toolbarEl) return 0;
+			var kids = toolbarEl.children;
+			var sum = 2 * TOOLBAR_PADDING_X_PX;
+			for (var i = 0; i < kids.length; i++) sum += kids[i].offsetWidth;
+			if (kids.length > 1) sum += (kids.length - 1) * TOOLBAR_GAP_PX;
+			// > padding alone means the buttons actually measured (the panel is laid out).
+			if (sum > 2 * TOOLBAR_PADDING_X_PX) toolbarRowWidth = Math.ceil(sum);
+			return toolbarRowWidth;
+		}
+
+		// Issue #2 — size the outline and reserve its room, for the pane AS IT IS NOW. Called once the
+		// strip is in the document, again whenever the outline opens, and again on every window resize,
+		// because the cap is a PERCENT of a pane that moves.
 		//
-		// Three sizings, and only the middle one is new:
-		//  - toolbar OFF        → exactly today's content-fit sizing, untouched (the regression contract).
-		//  - toolbar ON, hover  → still content-fit ("a hovered outline that does not need the width does
-		//                         not use it"): the percent only REPLACES the old cap as the max-width.
-		//  - PINNED             → an exactly-outlineWidthPx docked panel; the room made for it is that wide.
-		// P3 holds in all three: a row too long for the width stays a single line and is trimmed with an
-		// ellipsis, never wrapped.
+		// ONE sizing rule, pinned or hovered, toolbar or not: content-fit (`max-content`) between a floor
+		// and the cap. "It is a MAX width — don't make empty space": a pinned outline over three short
+		// headings docks narrow instead of reserving a wide empty gutter. The floor is 140px, or the
+		// toolbar's own single-row width when that is wider, so the three buttons never wrap; it is itself
+		// held to the pane width, since a floor wider than the pane would beat the cap (min-width wins
+		// over max-width) and overflow it. P3 still holds: a row too long for the width stays a single
+		// line and is trimmed with an ellipsis, never wrapped.
 		function applyOutlineGeometry() {
-			var width = outlineWidthPx();
+			var cap = outlineCapPx();
+			var pane = paneWidth();
 			var min = token('outlineMinWidthPx');
-			el.setAttribute('data-outline-width', String(width));
-			if (!toolbarOn()) {
-				p.width = 'max-content';
-				p.minWidth = min + 'px';
-				p.maxWidth = panelMaxWidthPx() + 'px';
-			} else if (pinned) {
-				p.width = width + 'px';
-				p.minWidth = width + 'px';
-				p.maxWidth = width + 'px';
-			} else {
-				// A pane narrower than the minimum cannot honour it (min-width would beat max-width and
-				// overflow the pane), so there the floor drops to the width itself.
-				p.width = 'max-content';
-				p.minWidth = Math.min(width, min) + 'px';
-				p.maxWidth = width + 'px';
-			}
+			var floor = Math.min(Math.max(min, toolbarRowWidthPx()), pane > 0 ? pane : min);
+			el.setAttribute('data-outline-width', String(cap));
+			p.width = 'max-content';
+			p.minWidth = floor + 'px';
+			p.maxWidth = cap + 'px';
+			// Reserved from the width the outline actually renders at, so it has to run after the sizing
+			// above (and with the panel in the document, which is why the first call is post-append).
 			applyReserveMargin();
 		}
-		applyOutlineGeometry();
 
 		// ── Issue #2: the outline toolbar — the outline's FIRST row ────────
 		//
@@ -967,7 +1013,7 @@
 						d === settings.maxDepth
 					);
 					button.setAttribute('data-depth', String(d));
-					button.textContent = depthLabelLong(d);
+					button.textContent = depthRangeLabel(d);
 					onToolbarClick(button, function () {
 						closePopover();
 						if (d !== settings.maxDepth) sendSettings({ maxDepth: d });
@@ -1002,11 +1048,11 @@
 			ts.zIndex = '2';
 			ts.display = 'flex';
 			ts.alignItems = 'center';
-			ts.gap = '6px';
-			// Wrap rather than clip: a narrow outline would otherwise push the Pin button out past the
-			// panel's overflow:hidden edge, where it could not be clicked.
-			ts.flexWrap = 'wrap';
-			ts.padding = '4px 6px';
+			ts.gap = TOOLBAR_GAP_PX + 'px';
+			// NEVER wraps: the three buttons are one control and must read as one row. The outline's floor
+			// is this row's own width (toolbarRowWidthPx), so there is always room for them on one line.
+			ts.flexWrap = 'nowrap';
+			ts.padding = '4px ' + TOOLBAR_PADDING_X_PX + 'px';
 			ts.margin = '0 ' + -tokens.panelPaddingPx + 'px 4px ' + -tokens.panelPaddingPx + 'px';
 			ts.background = colors.panelBg;
 			ts.borderBottom = '1px solid ' + colors.panelBorder;
@@ -1014,21 +1060,26 @@
 			// The rows' pointer cursor must not leak into the toolbar's background: only the buttons click.
 			ts.cursor = 'default';
 
-			// WIDTH — a horizontal double arrow + the current percent.
+			// WIDTH — Lucide's move-horizontal + the current percent.
 			var width = toolbarButton(colors, 'ridgeline-tb-width', 'ridgeline-viewer-tb-width', 'Outline width');
-			width.appendChild(svgIcon(['M18 8l4 4-4 4', 'M6 8l-4 4 4 4', 'M2 12h20']));
+			width.appendChild(svgIcon(ICON_WIDTH));
 			width.appendChild(document.createTextNode(settings.outlineWidthPercent + '%'));
 			onToolbarClick(width, function () { togglePopover('width'); });
 			bar.appendChild(width);
 
-			// HEADINGS — an H + the current depth range.
-			var headingsButton = toolbarButton(colors, 'ridgeline-tb-headings', 'ridgeline-viewer-tb-headings', 'Headings shown');
-			headingsButton.appendChild(svgIcon(['M6 4v16', 'M18 4v16', 'M6 12h12']));
-			headingsButton.appendChild(document.createTextNode(depthLabelShort(settings.maxDepth)));
+			// HEADINGS — Lucide's heading (which draws the H) + the depth range as bare numbers.
+			var headingsButton = toolbarButton(
+				colors,
+				'ridgeline-tb-headings',
+				'ridgeline-viewer-tb-headings',
+				depthTitle(settings.maxDepth)
+			);
+			headingsButton.appendChild(svgIcon(ICON_HEADINGS));
+			headingsButton.appendChild(document.createTextNode(depthRangeLabel(settings.maxDepth)));
 			onToolbarClick(headingsButton, function () { togglePopover('headings'); });
 			bar.appendChild(headingsButton);
 
-			// PIN — icon only; its pressed state is the pin itself.
+			// PIN — Lucide's pin, icon only, in a square of the shared button height; pressed, it fills.
 			var pin = toolbarButton(
 				colors,
 				'ridgeline-tb-pin',
@@ -1036,7 +1087,9 @@
 				pinned ? 'Unpin the outline' : 'Pin the outline open (Ctrl+Alt+P)',
 				pinned
 			);
-			pin.appendChild(svgIcon(['M9 2h6l-1 5 3 3v2H7v-2l3-3-1-5z', 'M12 12v10']));
+			pin.style.width = TOOLBAR_BUTTON_PX + 'px';
+			pin.style.padding = '0';
+			pin.appendChild(svgIcon(ICON_PIN, pinned));
 			onToolbarClick(pin, function () { sendSettings({ outlinePinned: !pinned }); });
 			bar.appendChild(pin);
 
@@ -1130,9 +1183,10 @@
 		});
 
 		// Issue #2: a PINNED outline stays on a note with no headings (W3 would otherwise unmount the
-		// whole strip), so it needs something to say — and the toolbar above it keeps the Pin button
-		// reachable, so the user can always unpin in place.
-		if (count === 0 && toolbarOn()) {
+		// whole strip), so it needs something to say — with the toolbar above it when there is one, so the
+		// Pin button stays reachable; without a toolbar the pin is undone from the Settings screen or with
+		// Ctrl+Alt+P.
+		if (count === 0 && (toolbarOn() || pinned)) {
 			var empty = document.createElement('div');
 			empty.className = 'ridgeline-panel-empty';
 			empty.setAttribute('data-testid', 'ridgeline-viewer-empty');
@@ -1212,6 +1266,9 @@
 			expanded = true;
 			panel.style.display = 'block';
 			el.setAttribute('data-expanded', 'true');
+			// Now that the panel is laid out, the toolbar row can finally be measured (everything is 0
+			// while it is display:none), so the outline's floor is right from the first frame it shows.
+			applyOutlineGeometry();
 			if (activeIndex >= 0 && rows[activeIndex]) rows[activeIndex].scrollIntoView({ block: 'nearest' });
 		}
 		function collapse() {
@@ -1311,7 +1368,9 @@
 		window.addEventListener('resize', resizeHandler);
 
 		document.body.appendChild(el);
-		applyReserveMargin();
+		// Now, not earlier: the room is measured off the rendered panel, which has to be in the document
+		// (and its rows and toolbar in place) before it has a width to measure.
+		applyOutlineGeometry();
 		updateActive();
 		// Issue #2: open from the moment it is built (its display and data-expanded were set above), so
 		// the current row is brought into view exactly as an expand() would.

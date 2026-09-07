@@ -182,9 +182,8 @@ async function registerSettings(): Promise<void> {
 			label: 'Show the outline toolbar',
 			description:
 				'Adds a row of controls to the top of the outline (the table of contents that opens over ' +
-				'the minimap): Width, Headings and Pin. Off by default, and then the outline behaves ' +
-				'exactly as before. The three settings below depend on it and do nothing while it is off. ' +
-				'Applies live.',
+				'the minimap): Width, Headings and Pin. They change the three settings below, which also ' +
+				'work from here without the toolbar. Off by default. Applies live.',
 			storage: SettingStorage.File,
 		},
 		[SETTING_OUTLINE_WIDTH_PERCENT]: {
@@ -195,14 +194,12 @@ async function registerSettings(): Promise<void> {
 			step: 1,
 			public: true,
 			section: SETTINGS_SECTION,
-			label: 'Outline width (% of the pane)',
+			label: 'Outline maximum width (% of the pane)',
 			description:
-				'The outline\'s width as a share of the editor or viewer pane. A pinned outline is exactly ' +
-				'this wide; the outline that opens on hover stays as narrow as its headings allow and uses ' +
-				'this only as its limit, as it does today. The toolbar\'s Width control offers 25, 33 and ' +
-				'50 and a field for any value from 10 to 90; this setting is the same value. The outline ' +
-				'is never narrower than 140 px and never wider than nine tenths of the pane. Needs the ' +
-				'outline toolbar. Applies live.',
+				'The widest the outline may grow, as a share of the editor or viewer pane. Whether it ' +
+				'opened on hover or is pinned, the outline stays as narrow as its headings allow and never ' +
+				'narrower than its toolbar or 140 px. The toolbar\'s Width control offers 25, 33 and 50 ' +
+				'and a field for any value from 10 to 90; this is the same setting. Applies live.',
 			storage: SettingStorage.File,
 		},
 		[SETTING_OUTLINE_PINNED]: {
@@ -213,9 +210,8 @@ async function registerSettings(): Promise<void> {
 			label: 'Pin the outline open',
 			description:
 				'Keep the outline open at the full height of the pane instead of opening it on hover — in ' +
-				'the editor and the viewer, in every window — until it is unpinned. The Pin button in the ' +
-				'outline toolbar and Ctrl+Alt+P flip this same setting, so a pin survives a restart. Needs ' +
-				'the outline toolbar. Applies live.',
+				'the editor and the viewer, in every window — until it is unpinned here, with the ' +
+				'toolbar\'s Pin button, or with Ctrl+Alt+P. Applies live.',
 			storage: SettingStorage.File,
 		},
 		[SETTING_OUTLINE_MAKE_ROOM]: {
@@ -230,8 +226,7 @@ async function registerSettings(): Promise<void> {
 				'outline begins stays visible. This is the outline\'s own, wide margin — separate from the ' +
 				'thin minimap margins above, which only clear the bars. Off: the pinned outline overlays ' +
 				'the text, as it does on hover. On a pane too narrow to leave at least 200 px of text ' +
-				'beside the outline, no room is made and the outline overlays instead. Needs the outline ' +
-				'toolbar and a pinned outline. Applies live.',
+				'beside the outline, no room is made and the outline overlays instead. Applies live.',
 			storage: SettingStorage.File,
 		},
 	});
@@ -492,24 +487,16 @@ joplin.plugins.register({
 			},
 		});
 		// Issue #2: flip the outline pin live, from the keyboard (Ctrl+Alt+P) or the Tools → Ridgeline
-		// submenu — the same setting the toolbar's Pin button writes, so a pin made either way survives a
-		// restart and shows in every window.
-		//
-		// Pinning while the toolbar is OFF also turns the toolbar on: the pin lives IN the toolbar row, so
-		// a pinned outline without one would be un-unpinnable by mouse (only this command could undo it).
-		// Unpinning never touches the toolbar setting — the user may well want to keep the toolbar.
+		// submenu — the same setting the toolbar's Pin button and the Settings screen write, so a pin made
+		// any of those ways survives a restart and shows in every window. It flips that one setting and
+		// nothing else: the pin does not need the toolbar, and a pinned outline with no toolbar simply
+		// shows its rows.
 		await joplin.commands.register({
 			name: TOGGLE_PIN_COMMAND,
 			label: 'Ridgeline: Toggle outline pin',
 			execute: async () => {
 				const pinned = (await joplin.settings.value(SETTING_OUTLINE_PINNED)) === true;
-				if (pinned) {
-					await joplin.settings.setValue(SETTING_OUTLINE_PINNED, false);
-					return;
-				}
-				await joplin.settings.setValue(SETTING_OUTLINE_PINNED, true);
-				const toolbar = (await joplin.settings.value(SETTING_OUTLINE_TOOLBAR)) === true;
-				if (!toolbar) await joplin.settings.setValue(SETTING_OUTLINE_TOOLBAR, true);
+				await joplin.settings.setValue(SETTING_OUTLINE_PINNED, !pinned);
 			},
 		});
 

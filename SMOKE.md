@@ -127,6 +127,26 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       margin. With a heading-less note open, toggling it flips the empty strip + margin on/off
       **live**, no relaunch.
 
+## The outline toolbar, the pin and the outline's width
+
+- [ ] **Pin without the toolbar.** With **Show the outline toolbar** *off* (the default), press
+      **Ctrl+Alt+P** (or Settings → Ridgeline → **Pin the outline open**). The outline **docks open** at
+      the full pane height in both the editor and the viewer, showing just its heading rows, and stays
+      open when the pointer goes elsewhere. The note text is **pushed aside** to make room for it
+      (**Make room for the pinned outline**, default on). Press **Ctrl+Alt+P** again: it goes back to a
+      hover outline and the text reclaims the space. All three settings work from the Settings screen
+      with the toolbar off — the toolbar only offers a second way to reach them.
+- [ ] **The toolbar.** Turn **Show the outline toolbar** *on* and open the outline: its first row is
+      **Width**, **Headings** and **Pin**, all the same height, never wrapping. Width offers 25 / 33 /
+      50 % and a field for any value from 10 to 90; Headings offers 1 … 1–6 and filters both surfaces;
+      Pin docks the outline and fills in. Every change applies **live**, on both surfaces.
+- [ ] **A maximum, not a width.** The outline is only as wide as its headings need, up to
+      **Outline maximum width**. On a note with short headings it stays narrow even when pinned — there
+      is no empty gutter — and the room reserved for it shrinks to match.
+- [ ] **Pinned on a heading-less note.** With the outline pinned, open a note with **no headings**: the
+      outline stays, showing **No headings** (with the toolbar above it if one is on), so it can be
+      unpinned in place.
+
 ## Multi-window
 
 - [ ] **Multi-window.** With the note selected, press **Ctrl+Alt+N** (Note → *Open note in new
@@ -142,5 +162,6 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
   live in **one file**, `src/tokens.ts`. Change a number there, rebuild, and both surfaces update.
 - Settings are stored in file storage, so they persist across restarts and can be pre-seeded in a
   profile's `settings.json` under `plugin-io.github.pmslava.ridgeline.<key>` (`side`, `editorMode`,
-  `viewerMode`, `maxDepth`, `showMinimap`, `hideWhenEmpty`, `showToolbarButton`) — this is how the E2E
+  `viewerMode`, `maxDepth`, `showMinimap`, `hideWhenEmpty`, `showToolbarButton`, `outlineToolbar`,
+  `outlineWidthPercent`, `outlinePinned`, `outlineMakeRoom`) — this is how the E2E
   suite exercises them without clicking through the UI.
