@@ -212,6 +212,33 @@ async function firePinToggle(win: Page): Promise<void> {
   await win.keyboard.press('Control+Alt+p');
 }
 
+/** `data-pinned` on the editor minimap, or null when the minimap is not mounted at all. */
+async function editorPinnedAttr(win: Page): Promise<string | null> {
+  const strip = win.locator(EDITOR_STRIP);
+  if ((await strip.count()) === 0) return null;
+  return strip.getAttribute('data-pinned').catch(() => null);
+}
+
+/**
+ * Establish the pin PRECONDITION explicitly, on both surfaces, before a test flips it.
+ *
+ * Playwright retries re-run a single test from the PREVIOUS attempt's mutated state, so a test that
+ * merely fires the toggle and then waits for the state it expects can invert itself on the retry (the
+ * first run of this spec did exactly that: A3's retry re-PINNED and then waited forever for a collapse).
+ * Reading the current value and only toggling when it is wrong makes each flip test idempotent.
+ *
+ * Requires a note WITH headings to be open when `wanted` is false — a heading-less, unpinned note has
+ * no minimap to carry the attribute (hideWhenEmpty).
+ */
+async function ensurePinned(win: Page, frame: Frame, wanted: boolean): Promise<void> {
+  const want = wanted ? 'true' : 'false';
+  if ((await editorPinnedAttr(win)) !== want) await firePinToggle(win);
+  // Wait for the EXACT expected value on both surfaces: `not.toBe('true')` would be satisfied
+  // instantly by a stale pre-push value and let the test run against the wrong state.
+  await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-pinned', want, { timeout: 15_000 });
+  await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-pinned', want, { timeout: 20_000 });
+}
+
 // ── Toolbar helpers ──────────────────────────────────────────────────────────────────────────────
 
 /** Open (or reuse) the Width popover inside the editor's outline, keeping the outline open. */
@@ -367,6 +394,10 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
     const { win } = joplin;
     const strip = win.locator(EDITOR_STRIP);
 
+    // Precondition, stated rather than assumed: NOT pinned (a retry starts from the previous attempt's
+    // state, where the toggle below would unpin instead of pin).
+    await ensurePinned(win, frame, false);
+
     await firePinToggle(win);
 
     // The editor is pushed the new settings immediately (no poll).
@@ -401,20 +432,26 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
     const { win } = joplin;
     const strip = win.locator(EDITOR_STRIP);
 
+    // Precondition: pinned on BOTH surfaces. Established explicitly so a retry (which starts from this
+    // test's own mutated end state) cannot fire the toggle in the wrong direction.
+    await ensurePinned(win, frame, true);
+
     await firePinToggle(win);
 
-    await expect.poll(() => strip.getAttribute('data-pinned'), { timeout: 15_000 }).not.toBe('true');
-    await expect
-      .poll(() => frame.locator(VIEWER_STRIP).getAttribute('data-pinned'), { timeout: 20_000 })
-      .not.toBe('true');
+    // Poll for the EXACT post-flip value on both surfaces. `not.toBe('true')` would be satisfied by a
+    // stale value the moment it is read, before the unpin has reached the surface.
+    await expect(strip).toHaveAttribute('data-pinned', 'false', { timeout: 15_000 });
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-pinned', 'false', {
+      timeout: 20_000,
+    });
 
     // Pointer away → the outline collapses after the hover grace on both surfaces.
     await movePointerToNoteList(win);
-    await expect.poll(() => strip.getAttribute('data-expanded'), { timeout: 10_000 }).toBe('false');
+    await expect(strip).toHaveAttribute('data-expanded', 'false', { timeout: 10_000 });
     await expect(win.locator(EDITOR_PANEL)).toBeHidden();
-    await expect
-      .poll(() => frame.locator(VIEWER_STRIP).getAttribute('data-expanded'), { timeout: 20_000 })
-      .toBe('false');
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-expanded', 'false', {
+      timeout: 20_000,
+    });
 
     // ...and hover opens it again (now with the toolbar the pin command switched on).
     await openEditorOutline(win);
@@ -611,6 +648,9 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     const { win } = joplin;
     const strip = win.locator(EDITOR_STRIP);
 
+    // Precondition: NOT pinned — otherwise a retry would click the pin button to UNpin.
+    await ensurePinned(win, frame, false);
+
     await openEditorOutline(win);
     await win.locator(`${EDITOR_PANEL} ${tb('editor', 'pin')}`).click();
 
@@ -672,7 +712,7 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
   // `.cm-content` padding-right and the viewer body's margin-right.
   test('B4: make-room pushes the note text aside by the pinned outline width (both surfaces)', async () => {
     const { win } = joplin;
-    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-pinned', 'true');
+    await ensurePinned(win, frame, true);
 
     const panelW = await editorPanelWidth(win);
     expect(panelW, 'pinned editor outline width').toBeGreaterThan(0);
@@ -705,8 +745,13 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
   // creates the heading-less note the placeholder test below needs.
   test('B4: the pin survives switching notes', async () => {
     const { win } = joplin;
+    await ensurePinned(win, frame, true);
 
-    await createNoteWithBody(win, EMPTY_NOTE, EMPTY_BODY);
+    // Idempotent on a retry: a second run must not create a duplicate note with the same title.
+    const alreadyThere = await win
+      .locator('.note-list-item .title span', { hasText: EMPTY_NOTE })
+      .count();
+    if (alreadyThere === 0) await createNoteWithBody(win, EMPTY_NOTE, EMPTY_BODY);
     await selectNoteByTitle(win, MIXED_NOTE);
 
     await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-pinned', 'true', {
@@ -721,6 +766,9 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
   // would unmount the whole minimap — that behaviour is unchanged and covered by w3-hide-when-empty.)
   test('B6: a pinned outline on a heading-less note keeps the toolbar and says "No headings"', async () => {
     const { win } = joplin;
+    // Pin while the note WITH headings is still open (a heading-less unpinned note has no minimap to
+    // toggle from), then move to the heading-less one.
+    await ensurePinned(win, frame, true);
     await selectNoteByTitle(win, EMPTY_NOTE);
 
     await expect(win.locator(EDITOR_STRIP)).toHaveCount(1, { timeout: 20_000 });
@@ -742,20 +790,22 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
   // `overlay` on both surfaces, i.e. none) immediately.
   test('B5: unpinning restores the legacy minimap margin (no room) on both surfaces', async () => {
     const { win } = joplin;
-    // Back on the note with headings, still pinned and still making room.
+    // Back on the note with headings, pinned (established, not assumed) and still making room.
     await selectNoteByTitle(win, MIXED_NOTE);
-    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-pinned', 'true', {
-      timeout: 20_000,
-    });
+    await ensurePinned(win, frame, true);
     await expect
       .poll(() => editorContentPaddingRight(win), { timeout: 20_000 })
       .toBeGreaterThan(NO_ROOM_PX);
 
     await firePinToggle(win);
 
-    await expect
-      .poll(() => win.locator(EDITOR_STRIP).getAttribute('data-pinned'), { timeout: 15_000 })
-      .not.toBe('true');
+    // Exact post-flip value, for the same staleness reason as A3.
+    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-pinned', 'false', {
+      timeout: 15_000,
+    });
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-pinned', 'false', {
+      timeout: 20_000,
+    });
     // Overlay mode reserves nothing at all — the note text reclaims the full pane.
     await expect
       .poll(() => editorContentPaddingRight(win), {
@@ -772,9 +822,9 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
 
     // And the outline is a hover outline again.
     await movePointerToNoteList(win);
-    await expect
-      .poll(() => win.locator(EDITOR_STRIP).getAttribute('data-expanded'), { timeout: 10_000 })
-      .toBe('false');
+    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-expanded', 'false', {
+      timeout: 10_000,
+    });
   });
 
   /**
