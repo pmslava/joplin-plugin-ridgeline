@@ -20,24 +20,26 @@ import {
  *
  * The outline (the expanded TOC panel `.ridgeline-panel` that opens over the compact minimap) gains an
  * optional FIRST ROW of controls — Width, Headings, Pin — behind the new `outlineToolbar` setting (OFF
- * by default). Pinning keeps the outline open at the full height of the pane; "make room"
- * (`outlineMakeRoom`, ON by default) pushes the note text aside by the outline's width so the pinned
- * outline never covers a word. `Ctrl+Alt+P` / the Tools → Ridgeline submenu flip the same `outlinePinned`
- * setting, turning the toolbar on as well when it is off (a pin with no toolbar could not be un-pinned
- * by mouse).
+ * by default). That setting adds ONLY the row: the width percent, the pin and make-room are independent
+ * settings that work whether or not the toolbar is shown. Pinning keeps the outline open at the full
+ * height of the pane; "make room" (`outlineMakeRoom`, ON by default) pushes the note text aside by the
+ * outline's width so the pinned outline never covers a word. `Ctrl+Alt+P` / the Tools → Ridgeline
+ * submenu flip `outlinePinned` and nothing else.
  *
  * WIDTH, the part that is easy to get wrong (contract "HOW IT IS APPLIED"):
- *   - the HOVER outline keeps today's content-fit sizing — `width: max-content`, `min-width: 140px` —
- *     and the width percentage is only its CAP (`max-width`). Short headings still give a narrow panel.
- *   - the PINNED outline is exactly `outlineWidthPx` wide (a docked panel has a definite width, and the
- *     room made for it equals that width).
- * So the percentage itself is asserted through the container's `data-outline-width` attribute and the
- * Width button's label; the rendered panel is asserted as "within the cap" while hovering and as "equal
- * to the cap" once pinned.
+ *   - BOTH the hover outline and the pinned one are content-fit — `width: max-content`, `min-width:
+ *     140px` — and the width percentage is only their CAP (`max-width`). Short headings give a narrow
+ *     panel either way; a pinned outline is additionally never narrower than its own toolbar row.
+ *   - the room made for a pinned outline follows the MEASURED panel width, not the cap:
+ *     `room = panelWidth + edgeGapPx (2) + outlineRoomGapPx (6)`.
+ * So the percentage itself is asserted through the container's `data-outline-width` attribute and (where
+ * there is a toolbar) the Width button's label; the rendered panel is asserted as "content-fit within
+ * the cap" whether hovering or pinned.
  *
  * TWO Joplin launches only (each cold launch is ~75 s):
- *   Launch A — a DEFAULT profile: the toolbar is off, so the outline must behave exactly as it does
- *              today, and the Ctrl+Alt+P command must be able to switch the whole feature on.
+ *   Launch A — a profile seeded with only `outlineWidthPercent: 20`: the toolbar is OFF, so the outline
+ *              must behave exactly as it does today, AND the width percent, the pin (Ctrl+Alt+P) and
+ *              make-room must all work with no toolbar to drive them.
  *   Launch B — seeded `{ outlineToolbar: true, side: 'right' }`: the toolbar itself, the width control
  *              (presets + typed value + clamping), the headings control, the pin button, make-room and
  *              the pinned empty-note placeholder.
@@ -69,14 +71,16 @@ function tb(surface: 'editor' | 'viewer', name: 'width' | 'headings' | 'pin'): s
 
 // ── Contract constants ───────────────────────────────────────────────────────────────────────────
 const OUTLINE_WIDTH_DEFAULT = 33;
+/** Launch A seeds a non-default percent, to prove the width applies with the toolbar off. */
+const LAUNCH_A_WIDTH_PERCENT = 30;
 const OUTLINE_MIN_WIDTH_PX = 140; // tokens.outlineMinWidthPx
 const OUTLINE_MAX_WIDTH_FRACTION = 0.9; // tokens.outlineMaxWidthFraction
 const OUTLINE_MIN_TEXT_PX = 200; // tokens.outlineMinTextPx
-// The heading-range labels use an EN DASH (U+2013), not a hyphen: `H1–H6`, `H1–H2`.
+// The heading-range labels are numbers only, joined by an EN DASH (U+2013), not a hyphen: `1–6`, `1–2`.
 const EN_DASH = '–';
 /** The published width is a rounded percentage of a pane whose px width depends on the layout. */
 const WIDTH_TOL_PX = 10;
-/** A pinned panel is set to exactly `data-outline-width`; only rounding/border may differ. */
+/** Content-fit bounds (cap, 140px floor, toolbar row) hold to within rounding and the 1px border. */
 const PINNED_WIDTH_TOL_PX = 2;
 /** The pinned panel spans the pane exactly; allow a few px for rounding/scrollbars. */
 const HEIGHT_TOL_PX = 4;
@@ -86,6 +90,9 @@ const NO_ROOM_PX = 14;
 /** A toolbar popover can be destroyed by a re-render racing the click that opened it — retry the click. */
 const POPOVER_OPEN_ATTEMPTS = 3;
 const POPOVER_OPEN_TIMEOUT_MS = 2000;
+/** Room = the MEASURED panel width + edgeGapPx (2) + outlineRoomGapPx (6). */
+const ROOM_GAP_PX = 8;
+const ROOM_TOL_PX = 4;
 
 /** The outline width (px) the contract's resolver must produce for a pane of `paneW` px at `pct` %. */
 function expectedOutlineWidthPx(paneW: number, pct: number): number {
@@ -140,17 +147,28 @@ async function outlineWidthAttr(strip: Locator): Promise<number> {
   return raw === null ? NaN : Number(raw);
 }
 
-/** The room (or thin minimap margin) the editor reserves on the RIGHT — side is `right` in Launch B. */
-async function editorContentPaddingRight(win: Page): Promise<number> {
-  return win.evaluate(() => {
+/** The room (or thin minimap margin) the editor reserves on the minimap's side (left in A, right in B). */
+async function editorContentPadding(win: Page, side: 'left' | 'right'): Promise<number> {
+  return win.evaluate((which) => {
     const el = document.querySelector('.cm-content') as HTMLElement | null;
-    return el ? parseFloat(getComputedStyle(el).paddingRight) || 0 : -1;
-  });
+    if (!el) return -1;
+    const cs = getComputedStyle(el);
+    return parseFloat(which === 'right' ? cs.paddingRight : cs.paddingLeft) || 0;
+  }, side);
 }
 
-/** The room (or thin minimap margin) the rendered viewer reserves on the RIGHT. */
-async function viewerBodyMarginRight(frame: Frame): Promise<number> {
-  return frame.evaluate(() => parseFloat(getComputedStyle(document.body).marginRight) || 0);
+/** The room (or thin minimap margin) the rendered viewer reserves on the minimap's side. */
+async function viewerBodyMargin(frame: Frame, side: 'left' | 'right'): Promise<number> {
+  return frame.evaluate((which) => {
+    const cs = getComputedStyle(document.body);
+    return parseFloat(which === 'right' ? cs.marginRight : cs.marginLeft) || 0;
+  }, side) as Promise<number>;
+}
+
+/** The intrinsic width of a surface's toolbar row, or 0 when that surface has no toolbar. */
+async function toolbarRowWidth(toolbar: Locator): Promise<number> {
+  if ((await toolbar.count()) === 0) return 0;
+  return toolbar.first().evaluate((el) => (el as HTMLElement).scrollWidth);
 }
 
 // ── Pointer helpers ──────────────────────────────────────────────────────────────────────────────
@@ -324,19 +342,29 @@ async function openHeadingsPopover(win: Page): Promise<Locator> {
  * `data-outline-width`, which must equal the contract's clamp of `pct` % of the editor pane. Polled,
  * because the change round-trips through the coordinator (`setSettings` → fresh `SettingsResponse`).
  */
-async function expectEditorWidthSetting(win: Page, pct: number): Promise<void> {
+async function expectEditorOutlineWidth(win: Page, pct: number): Promise<void> {
   const paneW = await editorPaneWidth(win);
   expect(paneW, 'editor pane width measured').toBeGreaterThan(0);
   const expected = expectedOutlineWidthPx(paneW, pct);
-  await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'width')}`)).toContainText(`${pct}%`, {
-    timeout: 10_000,
-  });
   await expect
     .poll(async () => Math.abs((await outlineWidthAttr(win.locator(EDITOR_STRIP))) - expected), {
       timeout: 10_000,
       message: `editor data-outline-width ≈ ${expected}px (${pct}% of a ${paneW}px pane)`,
     })
     .toBeLessThanOrEqual(WIDTH_TOL_PX);
+  // Never below the token floor, whatever the percentage asks for.
+  expect(
+    await outlineWidthAttr(win.locator(EDITOR_STRIP)),
+    'published outline width respects the 140px floor'
+  ).toBeGreaterThanOrEqual(Math.min(OUTLINE_MIN_WIDTH_PX, paneW));
+}
+
+/** The same, plus the toolbar's Width button label — for surfaces that HAVE a toolbar. */
+async function expectEditorWidthSetting(win: Page, pct: number): Promise<void> {
+  await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'width')}`)).toContainText(`${pct}%`, {
+    timeout: 10_000,
+  });
+  await expectEditorOutlineWidth(win, pct);
 }
 
 /** The same width setting as the VIEWER publishes it, against the viewer's own pane. */
@@ -354,62 +382,113 @@ async function expectViewerWidthSetting(frame: Frame, pct: number): Promise<void
 }
 
 /**
- * The HOVER outline is content-fit: never narrower than the 140px floor, never wider than the width
- * percentage (which is its `max-width` cap, published as `data-outline-width`). It may legitimately be
- * much narrower than the cap — these headings are short — so only the two bounds are asserted.
+ * The content-fit rule, identical for the hover outline and the pinned one: never wider than the width
+ * percentage (its `max-width` cap, published as `data-outline-width`), never narrower than the 140px
+ * floor, and never narrower than its own toolbar row (when the surface has one — the row must not be
+ * clipped). It may legitimately be much narrower than the cap: these headings are short.
  */
-async function expectHoverPanelWithinCap(win: Page): Promise<void> {
-  const paneW = await editorPaneWidth(win);
-  const cap = await outlineWidthAttr(win.locator(EDITOR_STRIP));
-  expect(Number.isFinite(cap), 'the minimap publishes data-outline-width').toBe(true);
-  const width = await editorPanelWidth(win);
-  expect(width, 'hover outline is rendered').toBeGreaterThan(0);
-  expect(width, 'hover outline never narrower than outlineMinWidthPx').toBeGreaterThanOrEqual(
-    Math.min(OUTLINE_MIN_WIDTH_PX, paneW) - PINNED_WIDTH_TOL_PX
-  );
-  expect(width, `hover outline is content-fit, capped at ${cap}px`).toBeLessThanOrEqual(
+function expectContentFit(
+  width: number,
+  cap: number,
+  paneW: number,
+  toolbarW: number,
+  where: string
+): void {
+  expect(width, `${where}: rendered`).toBeGreaterThan(0);
+  expect(Number.isFinite(cap), `${where}: the minimap publishes data-outline-width`).toBe(true);
+  expect(width, `${where}: content-fit, capped at ${cap}px`).toBeLessThanOrEqual(
     cap + PINNED_WIDTH_TOL_PX
   );
+  expect(width, `${where}: never narrower than the ${OUTLINE_MIN_WIDTH_PX}px floor`).toBeGreaterThanOrEqual(
+    Math.min(OUTLINE_MIN_WIDTH_PX, paneW) - PINNED_WIDTH_TOL_PX
+  );
+  if (toolbarW > 0) {
+    expect(width, `${where}: never narrower than its toolbar row (${toolbarW}px)`).toBeGreaterThanOrEqual(
+      toolbarW - PINNED_WIDTH_TOL_PX
+    );
+  }
 }
 
-/** A PINNED outline is docked: exactly `data-outline-width` wide (±2px), on either surface. */
-async function expectPinnedPanelWidthExact(win: Page): Promise<void> {
-  const cap = await outlineWidthAttr(win.locator(EDITOR_STRIP));
-  expect(Number.isFinite(cap), 'the editor minimap publishes data-outline-width').toBe(true);
+/** The content-fit rule applied to the editor's outline, hovered or pinned. */
+async function expectEditorPanelContentFit(win: Page, where: string): Promise<void> {
+  await expect(win.locator(EDITOR_PANEL)).toBeVisible();
+  expectContentFit(
+    await editorPanelWidth(win),
+    await outlineWidthAttr(win.locator(EDITOR_STRIP)),
+    await editorPaneWidth(win),
+    await toolbarRowWidth(win.locator(`${EDITOR_PANEL} ${TOOLBAR}`)),
+    where
+  );
+}
+
+/** Kept under its old name: every call site asserts exactly this rule on the open hover outline. */
+async function expectHoverPanelWithinCap(win: Page): Promise<void> {
+  await expectEditorPanelContentFit(win, 'hover outline');
+}
+
+async function expectPinnedPanelContentFit(win: Page): Promise<void> {
+  await expectEditorPanelContentFit(win, 'pinned editor outline');
+}
+
+/** The same rule in the viewer, whose panel is rebuilt when the pin arrives on its settings poll. */
+async function expectPinnedViewerPanelContentFit(frame: Frame): Promise<void> {
+  await expect(frame.locator(VIEWER_PANEL)).toBeVisible({ timeout: 20_000 });
+  expectContentFit(
+    await viewerPanelWidth(frame),
+    await outlineWidthAttr(frame.locator(VIEWER_STRIP)),
+    await viewerPaneWidth(frame),
+    await toolbarRowWidth(frame.locator(`${VIEWER_PANEL} ${TOOLBAR}`)),
+    'pinned viewer outline'
+  );
+}
+
+/**
+ * Make-room follows the MEASURED panel width, not the cap: the note text is pushed aside by exactly
+ * `panelWidth + edgeGapPx + outlineRoomGapPx` on the minimap's side.
+ */
+async function expectEditorRoom(win: Page, side: 'left' | 'right'): Promise<void> {
+  const panelW = await editorPanelWidth(win);
+  expect(panelW, 'pinned editor outline width').toBeGreaterThan(0);
+  const expected = panelW + ROOM_GAP_PX;
   await expect
-    .poll(async () => Math.abs((await editorPanelWidth(win)) - cap), {
-      timeout: 10_000,
-      message: `pinned editor outline width = data-outline-width (${cap}px)`,
+    .poll(async () => Math.abs((await editorContentPadding(win, side)) - expected), {
+      timeout: 15_000,
+      message: `.cm-content padding-${side} = outline width + ${ROOM_GAP_PX}px (${expected}px)`,
     })
-    .toBeLessThanOrEqual(PINNED_WIDTH_TOL_PX);
+    .toBeLessThanOrEqual(ROOM_TOL_PX);
 }
 
-async function expectPinnedViewerPanelWidthExact(frame: Frame): Promise<void> {
+async function expectViewerRoom(frame: Frame, side: 'left' | 'right'): Promise<void> {
+  const panelW = await viewerPanelWidth(frame);
+  expect(panelW, 'pinned viewer outline width').toBeGreaterThan(0);
+  const expected = panelW + ROOM_GAP_PX;
   await expect
-    .poll(
-      async () => {
-        const cap = await outlineWidthAttr(frame.locator(VIEWER_STRIP));
-        const width = await viewerPanelWidth(frame);
-        return Number.isFinite(cap) && width > 0 ? Math.abs(width - cap) : Number.NaN;
-      },
-      {
-        timeout: 20_000,
-        message: 'pinned viewer outline width = its own data-outline-width',
-      }
-    )
-    .toBeLessThanOrEqual(PINNED_WIDTH_TOL_PX);
+    .poll(async () => Math.abs((await viewerBodyMargin(frame, side)) - expected), {
+      timeout: 20_000,
+      message: `viewer body margin-${side} = outline width + ${ROOM_GAP_PX}px (${expected}px)`,
+    })
+    .toBeLessThanOrEqual(ROOM_TOL_PX);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
 // LAUNCH A — default profile: the toolbar is OFF, and Ctrl+Alt+P switches the feature on.
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
-test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)', () => {
+test.describe('Outline toolbar OFF: width, pin and make-room still work', () => {
   let joplin: JoplinInstance;
   let frame: Frame;
 
   test.beforeAll(async () => {
     test.setTimeout(300_000);
-    joplin = await launchJoplin();
+    // Everything but the toolbar is left at its default; `outlineWidthPercent` is seeded to a
+    // non-default 20 so A1 can prove the width percent applies with the toolbar OFF. Patched into
+    // settings.json directly (the z1-zoom-phase pattern), like Launch B seeds the toolbar itself.
+    const profileDir = createProfile(true, {});
+    const settingsFile = path.join(profileDir, 'settings.json');
+    const seeded = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    seeded[`plugin-${PLUGIN_ID}.outlineWidthPercent`] = LAUNCH_A_WIDTH_PERCENT;
+    fs.writeFileSync(settingsFile, JSON.stringify(seeded, null, 2), 'utf8');
+
+    joplin = await launchJoplin({ profileDir });
     await createNotebook(joplin.win, 'Ridgeline NB');
     await createNoteWithBody(joplin.win, 'Outline Default Note', buildMixedNoteBody());
     await waitForEditorStrip(joplin.win);
@@ -422,8 +501,9 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
   });
 
   // Contract A(1) — with `outlineToolbar` off the outline is exactly what it is today: hover opens it,
-  // it lists every heading, and it carries NO toolbar row on either surface.
-  test('A1: with the setting off, the hover outline has no toolbar (editor and viewer)', async () => {
+  // it lists every heading, and it carries NO toolbar row on either surface. The width percent is a
+  // separate setting, so the seeded 20% must shape this toolbar-less outline all the same.
+  test('A1: with the setting off, the hover outline has no toolbar but honours the width (editor and viewer)', async () => {
     const { win } = joplin;
 
     await openEditorOutline(win);
@@ -432,6 +512,10 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
     await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'pin')}`)).toHaveCount(0);
     // Nothing claims to be pinned either.
     expect(await win.locator(EDITOR_STRIP).getAttribute('data-pinned')).not.toBe('true');
+
+    // The seeded 20% is published (and floored at 140px) and caps this toolbar-less hover outline.
+    await expectEditorOutlineWidth(win, LAUNCH_A_WIDTH_PERCENT);
+    await expectHoverPanelWithinCap(win);
 
     // The viewer's outline: same story inside the note iframe.
     await movePointerToNoteList(win);
@@ -446,10 +530,11 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
     await leaveViewerOutline(win, frame);
   });
 
-  // Contract A(2) — Ctrl+Alt+P on a profile with no toolbar must turn the toolbar ON as well as pinning
-  // (a pin with no toolbar would be invisible and impossible to undo with the mouse). The pinned outline
-  // does not close when the pointer walks away.
-  test('A2: Ctrl+Alt+P pins the outline and turns the toolbar on, in both surfaces', async () => {
+  // Contract A(2) — the pin is independent of the toolbar: Ctrl+Alt+P pins on a profile with no toolbar
+  // and adds no toolbar. The pinned outline spans the pane, does not close when the pointer walks away,
+  // and make-room (default ON) pushes the note text aside on the minimap's side — here the LEFT, since
+  // Launch A runs at the default `side: left`.
+  test('A2: Ctrl+Alt+P pins and makes room with no toolbar, in both surfaces', async () => {
     const { win } = joplin;
     const strip = win.locator(EDITOR_STRIP);
 
@@ -459,16 +544,11 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
 
     await firePinToggle(win);
 
-    // The editor is pushed the new settings immediately (no poll).
+    // The editor is pushed the new settings immediately (no poll). The pin adds NO toolbar row.
     await expect(strip).toHaveAttribute('data-pinned', 'true', { timeout: 15_000 });
     await expect(strip).toHaveAttribute('data-expanded', 'true', { timeout: 15_000 });
     await expect(win.locator(EDITOR_PANEL)).toBeVisible({ timeout: 15_000 });
-    await expect(win.locator(`${EDITOR_PANEL} ${TOOLBAR}`)).toHaveCount(1, { timeout: 15_000 });
-    await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'pin')}`)).toHaveAttribute(
-      'aria-pressed',
-      'true',
-      { timeout: 15_000 }
-    );
+    await expect(win.locator(`${EDITOR_PANEL} ${TOOLBAR}`)).toHaveCount(0);
 
     // Walk the pointer far away and wait out any hover grace: a pinned outline stays open.
     await movePointerToNoteList(win);
@@ -477,12 +557,29 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
     await expect(strip).toHaveAttribute('data-pinned', 'true');
     await expect(strip).toHaveAttribute('data-expanded', 'true');
 
-    // The viewer follows through its ~700ms settings poll.
+    // Pinned = the full height of the pane, and still content-fit within the seeded 20% cap.
+    const paneH = await editorPaneHeight(win);
+    expect(paneH, 'editor pane height measured').toBeGreaterThan(0);
+    await expect
+      .poll(async () => Math.abs((await editorPanelHeight(win)) - paneH), {
+        timeout: 10_000,
+        message: `pinned outline height ≈ editor pane height (${paneH}px)`,
+      })
+      .toBeLessThanOrEqual(HEIGHT_TOL_PX);
+    await expectPinnedPanelContentFit(win);
+
+    // Make-room, with no toolbar anywhere: the note text is pushed aside on the LEFT by the outline's
+    // measured width plus the two small gaps.
+    await expectEditorRoom(win, 'left');
+
+    // The viewer follows through its ~700ms settings poll — pinned, no toolbar, and its own room.
     await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-pinned', 'true', {
       timeout: 20_000,
     });
     await expect(frame.locator(VIEWER_PANEL)).toBeVisible({ timeout: 20_000 });
-    await expect(frame.locator(`${VIEWER_PANEL} ${TOOLBAR}`)).toHaveCount(1, { timeout: 20_000 });
+    await expect(frame.locator(`${VIEWER_PANEL} ${TOOLBAR}`)).toHaveCount(0);
+    await expectPinnedViewerPanelContentFit(frame);
+    await expectViewerRoom(frame, 'left');
   });
 
   // Contract A(3) — a second Ctrl+Alt+P unpins both surfaces and hands the outline back to hover: with
@@ -512,9 +609,9 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
       timeout: 20_000,
     });
 
-    // ...and hover opens it again (now with the toolbar the pin command switched on).
+    // ...and hover opens it again — still with no toolbar, since the pin command never adds one.
     await openEditorOutline(win);
-    await expect(win.locator(`${EDITOR_PANEL} ${TOOLBAR}`)).toHaveCount(1);
+    await expect(win.locator(`${EDITOR_PANEL} ${TOOLBAR}`)).toHaveCount(0);
     await movePointerToNoteList(win);
   });
 });
@@ -577,14 +674,36 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
       "the toolbar is the panel's first child"
     ).toContain('ridgeline-toolbar');
 
-    // Labels/state mirror the settings: 33%, the full H1–H6 range, not pinned.
+    // Labels/state mirror the settings: 33%, the full 1–6 heading range (numbers only), not pinned.
     await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'headings')}`)).toContainText(
-      `H1${EN_DASH}H6`
+      `1${EN_DASH}6`
     );
     await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'pin')}`)).toHaveAttribute(
       'aria-pressed',
       'false'
     );
+
+    // The three buttons sit on ONE row: same top, same height, and the icon-only Pin button is square.
+    const widthBox = await win.locator(`${EDITOR_PANEL} ${tb('editor', 'width')}`).boundingBox();
+    const headingsBox = await win.locator(`${EDITOR_PANEL} ${tb('editor', 'headings')}`).boundingBox();
+    const pinBox = await win.locator(`${EDITOR_PANEL} ${tb('editor', 'pin')}`).boundingBox();
+    expect(widthBox && headingsBox && pinBox, 'all three toolbar buttons are laid out').toBeTruthy();
+    if (widthBox && headingsBox && pinBox) {
+      const tops = [widthBox.y, headingsBox.y, pinBox.y];
+      expect(
+        Math.max(...tops) - Math.min(...tops),
+        'the three toolbar buttons sit on one row'
+      ).toBeLessThanOrEqual(1);
+      const heights = [widthBox.height, headingsBox.height, pinBox.height];
+      expect(
+        Math.max(...heights) - Math.min(...heights),
+        'the three toolbar buttons are the same height'
+      ).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(pinBox.width - pinBox.height),
+        'the icon-only Pin button is square'
+      ).toBeLessThanOrEqual(1);
+    }
 
     // 33% is published on the container (and shown on the button); the hover panel is content-fit
     // within that cap and never below the 140px floor.
@@ -604,7 +723,7 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await expect(frame.locator(`${VIEWER_PANEL} ${TOOLBAR}`)).toHaveCount(1);
     await expect(frame.locator(`${VIEWER_PANEL} ${tb('viewer', 'width')}`)).toContainText('33%');
     await expect(frame.locator(`${VIEWER_PANEL} ${tb('viewer', 'headings')}`)).toContainText(
-      `H1${EN_DASH}H6`
+      `1${EN_DASH}6`
     );
     await expect(frame.locator(`${VIEWER_PANEL} ${tb('viewer', 'pin')}`)).toHaveAttribute(
       'aria-pressed',
@@ -676,14 +795,14 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await parkPointerInEditorPanel(win);
 
     await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'headings')}`)).toContainText(
-      `H1${EN_DASH}H2`,
+      `1${EN_DASH}2`,
       { timeout: 10_000 }
     );
     await expect(win.locator(EDITOR_ROWS)).toHaveCount(2, { timeout: 10_000 });
     // The viewer re-renders its own outline on the settings poll.
     await expect(frame.locator(VIEWER_ROWS)).toHaveCount(2, { timeout: 20_000 });
     await expect(frame.locator(`${VIEWER_PANEL} ${tb('viewer', 'headings')}`)).toContainText(
-      `H1${EN_DASH}H2`,
+      `1${EN_DASH}2`,
       { timeout: 20_000 }
     );
 
@@ -692,7 +811,7 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await popover.locator('button.ridgeline-tb-depth[data-depth="6"]').click();
     await parkPointerInEditorPanel(win);
     await expect(win.locator(`${EDITOR_PANEL} ${tb('editor', 'headings')}`)).toContainText(
-      `H1${EN_DASH}H6`,
+      `1${EN_DASH}6`,
       { timeout: 10_000 }
     );
     await expect(win.locator(EDITOR_ROWS)).toHaveCount(MIXED_HEADINGS.length, { timeout: 10_000 });
@@ -787,10 +906,10 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await expectEditorWidthSetting(win, OUTLINE_WIDTH_DEFAULT);
   });
 
-  // Contract B(4a) — the Pin button: the outline docks at exactly the published width, takes the full
-  // height of the pane, never closes, keeps its rounded border (so the seam between note and outline
+  // Contract B(4a) — the Pin button: the outline takes the full height of the pane, stays content-fit
+  // within its width cap, never closes, keeps its rounded border (so the seam between note and outline
   // stays visible), and the viewer pins too.
-  test('B4: the Pin button docks the outline open at the full pane height on both surfaces', async () => {
+  test('B4: the Pin button holds the outline open at the full pane height on both surfaces', async () => {
     const { win } = joplin;
     const strip = win.locator(EDITOR_STRIP);
 
@@ -814,8 +933,9 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await expect(win.locator(EDITOR_PANEL)).toBeVisible();
     await expect(strip).toHaveAttribute('data-pinned', 'true');
 
-    // Pinned = docked: exactly as wide as the published outline width (no longer content-fit).
-    await expectPinnedPanelWidthExact(win);
+    // Pinned is content-fit exactly like the hover outline: within the published cap, above the 140px
+    // floor, and never narrower than the toolbar row it must show.
+    await expectPinnedPanelContentFit(win);
 
     // Full pane height (the minimap container spans the pane; the pinned panel spans the container).
     const paneH = await editorPaneHeight(win);
@@ -850,7 +970,7 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
       'true',
       { timeout: 20_000 }
     );
-    await expectPinnedViewerPanelWidthExact(frame);
+    await expectPinnedViewerPanelContentFit(frame);
   });
 
   // Contract B(4b) — "Make room for the pinned outline" (ON by default): the note text is pushed aside by
@@ -860,29 +980,16 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     const { win } = joplin;
     await ensurePinned(win, frame, true);
 
-    const panelW = await editorPanelWidth(win);
-    expect(panelW, 'pinned editor outline width').toBeGreaterThan(0);
-    await expect
-      .poll(() => editorContentPaddingRight(win), {
-        timeout: 15_000,
-        message: `.cm-content padding-right covers the ${panelW}px outline`,
-      })
-      .toBeGreaterThanOrEqual(panelW);
-
-    const viewerPanelW = await viewerPanelWidth(frame);
-    expect(viewerPanelW, 'pinned viewer outline width').toBeGreaterThan(0);
-    await expect
-      .poll(() => viewerBodyMarginRight(frame), {
-        timeout: 20_000,
-        message: `viewer body margin-right covers the ${viewerPanelW}px outline`,
-      })
-      .toBeGreaterThanOrEqual(viewerPanelW);
+    // The room is the MEASURED panel width + the two gaps — not the width cap, which the content-fit
+    // panel may well be narrower than.
+    await expectEditorRoom(win, 'right');
+    await expectViewerRoom(frame, 'right');
 
     // Room is made only while there is still a real text column beside the outline (contract:
     // outlineMinTextPx = 200). This pane is wide, so that condition holds here.
     const paneW = await editorPaneWidth(win);
     expect(
-      paneW - (await editorContentPaddingRight(win)),
+      paneW - (await editorContentPadding(win, 'right')),
       'text column left beside the outline'
     ).toBeGreaterThanOrEqual(OUTLINE_MIN_TEXT_PX);
   });
@@ -940,7 +1047,7 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await selectNoteByTitle(win, MIXED_NOTE);
     await ensurePinned(win, frame, true);
     await expect
-      .poll(() => editorContentPaddingRight(win), { timeout: 20_000 })
+      .poll(() => editorContentPadding(win, 'right'), { timeout: 20_000 })
       .toBeGreaterThan(NO_ROOM_PX);
 
     await firePinToggle(win);
@@ -954,13 +1061,13 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     });
     // Overlay mode reserves nothing at all — the note text reclaims the full pane.
     await expect
-      .poll(() => editorContentPaddingRight(win), {
+      .poll(() => editorContentPadding(win, 'right'), {
         timeout: 15_000,
         message: 'editor room released on unpin (overlay mode → no margin)',
       })
       .toBeLessThan(NO_ROOM_PX);
     await expect
-      .poll(() => viewerBodyMarginRight(frame), {
+      .poll(() => viewerBodyMargin(frame, 'right'), {
         timeout: 20_000,
         message: 'viewer room released on unpin (overlay mode → no margin)',
       })
