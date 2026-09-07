@@ -90,6 +90,11 @@
 	// carry-open decision below, and releaseHold() deciding whether the outline is still under the
 	// pointer once a width field is finished with.
 	var lastPointer = null;
+	// Set by sendSettings immediately before the rebuild its own answer triggers, and consumed by the
+	// very next build(). It is what tells "this rebuild is the answer to a click on THIS viewer's
+	// toolbar" apart from every other rebuild (a poll tick, a note render), which is the only case the
+	// carry-open below may act on — see pointerHoldsOutlineOpen.
+	var carryOpenOnNextBuild = false;
 
 	function tokenLength(level) {
 		var lengths = tokens.levelLengths || FALLBACK_TOKENS.levelLengths;
@@ -474,6 +479,9 @@
 			.then(function (result) {
 				if (!result || typeof result !== 'object') return;
 				applySettingsResult(result);
+				// This rebuild is OUR click's own consequence: the pointer is on the toolbar we are about to
+				// throw away, so the outline may be carried open across it (and only across it).
+				carryOpenOnNextBuild = true;
 				rebuild();
 			})
 			.catch(function () { /* the poll will pick the change up */ });
@@ -588,6 +596,16 @@
 	// strip is rebuilt, so without this the outline would simply vanish mid-interaction, and with the
 	// minimap on the right the Pin button sits far from the bars, so nothing would reopen it. Pinned is
 	// excluded: `pinned` decides that case on its own.
+	//
+	// It is deliberately narrow: the caller ALSO requires `carryOpenOnNextBuild`, so only a rebuild this
+	// viewer's own setSettings answer triggered may carry the outline open. `lastPointer` cannot be
+	// trusted otherwise. Measured against this Electron build: when the pointer moves from inside the
+	// note iframe straight into the main window, this document receives NO departure event at all — no
+	// mouseout with a null relatedTarget, no mouseleave, no blur (pre-existing, and the reason departZone
+	// cannot cover it). `lastPointer` therefore sits stale at its last in-iframe position, and a rebuild
+	// driven by a change made ELSEWHERE (the editor's toolbar, the settings screen, Ctrl+Alt+P) would
+	// carry the outline open with the pointer long gone — and, hover being the only thing that could then
+	// close it, keep it open until the next mousemove inside the viewer.
 	function pointerHoldsOutlineOpen() {
 		if (!lastPointer) return false;
 		var existing = document.getElementById(STRIP_ID);
@@ -600,8 +618,12 @@
 	}
 
 	function build() {
+		// Read AND clear, whatever this build then decides, so a flag set for a rebuild that never came
+		// (a failed round-trip) can never leak into a later, unrelated one.
+		var ownChange = carryOpenOnNextBuild;
+		carryOpenOnNextBuild = false;
 		// Must be measured while the OUTGOING strip is still in the document (see above).
-		var carryOpen = pointerHoldsOutlineOpen();
+		var carryOpen = ownChange && pointerHoldsOutlineOpen();
 
 		// Idempotent: remove any strip we (or a previous build) left behind.
 		var existing = document.getElementById(STRIP_ID);
