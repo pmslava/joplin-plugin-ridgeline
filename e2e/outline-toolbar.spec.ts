@@ -12,6 +12,7 @@ import {
   waitForEditorStrip,
   MIXED_HEADINGS,
   EDITOR_STRIP,
+  VIEWER_IFRAME,
 } from './helpers';
 
 /**
@@ -164,6 +165,34 @@ async function movePointerToNoteList(win: Page): Promise<void> {
   if (box) await win.mouse.move(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2));
   else await win.mouse.move(200, 500);
   await win.waitForTimeout(100);
+}
+
+/**
+ * Close the viewer's hover outline the only way the viewer can actually observe.
+ *
+ * HARNESS LIMIT (measured on the real app with an instrumented probe): when the pointer moves from
+ * inside the note iframe straight out to the main window, the viewer document receives NO departure
+ * event at all — mouseout with a null relatedTarget: 0, mouseleave: 0, blur: 0. It happens for the
+ * plain hover outline too (the listener set is unchanged from main), and z3-iframe-transit only ever
+ * exercised departure INTO a nested iframe, so nothing caught it before. A `movePointerToNoteList`
+ * therefore leaves the viewer outline open forever — and an open panel covers the bars, so the NEXT
+ * viewer hover in the file blocks on actionability until it times out.
+ *
+ * Departing WITHIN the iframe — a mousemove over the rendered note, well clear of the bars and panel —
+ * is the observable path and runs exactly the same depart/collapse rule. 30% across / 60% down of the
+ * iframe is inside the note body and clear of the outline on either side (it hugs one edge, and the
+ * hover outline is content-fit narrow for these short headings). The pointer is then parked over the
+ * note list as usual, so the editor surface sees a departure too.
+ */
+async function leaveViewerOutline(win: Page, frame: Frame): Promise<void> {
+  const box = await win.locator(VIEWER_IFRAME).boundingBox().catch(() => null);
+  if (box && (await frame.locator(VIEWER_STRIP).count()) > 0) {
+    await win.mouse.move(Math.round(box.x + box.width * 0.3), Math.round(box.y + box.height * 0.6));
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-expanded', 'false', {
+      timeout: 5_000,
+    });
+  }
+  await movePointerToNoteList(win);
 }
 
 /**
@@ -413,7 +442,8 @@ test.describe('Outline toolbar OFF by default; Ctrl+Alt+P pins (default profile)
       timeout: 10_000,
     });
     await expect(frame.locator(`${VIEWER_PANEL} ${TOOLBAR}`)).toHaveCount(0);
-    await movePointerToNoteList(win);
+    // Close it from INSIDE the iframe (see leaveViewerOutline) so no test leaves the viewer outline open.
+    await leaveViewerOutline(win, frame);
   });
 
   // Contract A(2) — Ctrl+Alt+P on a profile with no toolbar must turn the toolbar ON as well as pinning
@@ -581,7 +611,7 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
       'false'
     );
     await expectViewerWidthSetting(frame, OUTLINE_WIDTH_DEFAULT);
-    await movePointerToNoteList(win);
+    await leaveViewerOutline(win, frame);
   });
 
   // Contract B(2) — the Width control: the three presets, a typed value, and the 10–90 clamp. Each change
@@ -693,6 +723,15 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
 
     // The same rule in the viewer. helpers.ts has no viewer-hover helper (only hoverEditorBars), so the
     // viewer bars are hovered through the frame locator, as A1/B1 already do in this file.
+    //
+    // The DEPARTURE here is made INSIDE the iframe rather than by walking out to the note list: the
+    // viewer document never receives a departure event when the pointer leaves the iframe for the main
+    // window (harness limit — see leaveViewerOutline), so the in-document move is the only way to
+    // trigger it. It is the same departHold rule and the same code path; only the event differs.
+    if ((await frame.locator(VIEWER_STRIP).getAttribute('data-expanded')) === 'true') {
+      // Something upstream left the viewer outline open, and an open panel covers the bars to hover.
+      await leaveViewerOutline(win, frame);
+    }
     const viewerBars = frame.locator(`${VIEWER_STRIP} .ridgeline-bars`);
     await expect(viewerBars).toBeVisible({ timeout: 20_000 });
     await viewerBars.hover();
@@ -703,10 +742,10 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     const viewerPopover = frame.locator(`${VIEWER_PANEL} ${WIDTH_POPOVER}`);
     await expect(viewerPopover).toBeVisible({ timeout: 10_000 });
 
-    await movePointerToNoteList(win);
-    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-expanded', 'false', {
-      timeout: 10_000,
-    });
+    // Depart over the note body: the open popover must close WITH the outline, not hold it open.
+    // (leaveViewerOutline already waits for data-expanded='false'; assert it here for the record.)
+    await leaveViewerOutline(win, frame);
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-expanded', 'false');
     await expect(viewerPopover).toBeHidden();
   });
 
