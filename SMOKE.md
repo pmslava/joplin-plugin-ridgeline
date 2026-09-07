@@ -100,8 +100,8 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
 
 - [ ] **Live settings.** Every Ridgeline setting applies immediately, in every open window, without a
       relaunch.
-- [ ] **Side = right (live).** Settings → Ridgeline → *Strip side* → **Right** (or run
-      **Tools → Ridgeline → Ridgeline: Toggle strip side**, accelerator **Ctrl+Alt+R**). Both strips
+- [ ] **Side = right (live).** Settings → Ridgeline → *Minimap side* → **Right** (or run
+      **Tools → Ridgeline → Ridgeline: Toggle minimap side**, accelerator **Ctrl+Alt+R**). Both strips
       move to the **right** edge immediately, **no relaunch** (the editor one tucked just inside the
       scrollbar).
 - [ ] **Reserve mode.** Settings → Ridgeline → set *Editor strip mode* / *Viewer strip mode* to

@@ -43,7 +43,7 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Strip side** | Left | Which edge of the editor/viewer the minimap sits on — Left or Right. |
+| **Minimap side** | Left | Which edge of the editor/viewer the minimap sits on — Left or Right. |
 | **Editor minimap margin** | None | The thin margin for the minimap's bars in the Markdown editor: `None` lets the bars overlay the text, `Thin margin` keeps the text clear of them. It applies to the bars only, never to the outline — a pinned outline has its own, wider margin below. |
 | **Viewer minimap margin** | None | The same choice for the rendered viewer, set independently of the editor. |
 | **Maximum heading depth** | H1–H6 | The deepest heading level shown. Headings deeper than this are dropped from the minimap and the outline. |
@@ -61,7 +61,7 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 | Command | Shortcut | Also |
 | --- | --- | --- |
 | **Ridgeline: Toggle minimap** | `Ctrl+Alt+M` | A note-toolbar button (the `fa-stream` icon — a stack of staggered lines that reads as the minimap). |
-| **Ridgeline: Toggle strip side (left/right)** | `Ctrl+Alt+R` | — |
+| **Ridgeline: Toggle minimap side (left/right)** | `Ctrl+Alt+R` | — |
 | **Ridgeline: Toggle hide-when-empty** | `Ctrl+Alt+H` | — |
 | **Ridgeline: Toggle outline pin** | `Ctrl+Alt+P` | Also the Pin button in the outline toolbar. Pinning while the toolbar is off switches the toolbar on too, so the pin can always be undone with the mouse. |
 

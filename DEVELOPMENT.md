@@ -184,10 +184,27 @@ touches your real Joplin profile.
     **outline toolbar** (issue #2): an optional first row inside `.ridgeline-panel` — `.ridgeline-toolbar`
     with `.ridgeline-tb-width` / `.ridgeline-tb-headings` / `.ridgeline-tb-pin`, and a
     `.ridgeline-tb-popover` that opens INSIDE the panel (so the hover hit-test on the panel's own rect
-    keeps the outline open while it is used). The two implementations are deliberate mirrors, not shared
+    keeps the outline open while the pointer is on it). What HOLDS the outline open against the collapse
+    grace, though, is only the width field having FOCUS — the user is typing. A merely-open popover does
+    not hold it: when the pointer leaves the zone the popover is dismissed and the outline collapses
+    normally, and when a held field applies or blurs the outline is handed straight back to the grace if
+    the pointer has meanwhile moved off it. Without that rule the viewer could strand an outline open
+    for good: once the pointer is out of the note iframe no further mousemove arrives there and its
+    Escape handler is bound to that window, so nothing was left to close it until the next rebuild. The two implementations are deliberate mirrors, not shared
     code: identical class names, behaviour and layout, with the `data-testid` prefixed per surface. With
-    `outlineToolbar` off every path in both files behaves exactly as it did before the toolbar existed —
-    that regression contract is what keeps the older specs green. Layout notes: pinned, the panel is
+    `outlineToolbar` off every path in both files behaves as it did before the toolbar existed —
+    that regression contract is what keeps the older specs green — **identical except for four
+    deliberate refinements that apply whether or not the toolbar is on**, listed here so the claim is
+    not read as broader than it is. (1) `renderPanel` carries the panel's `scrollTop` across a rebuild:
+    a pinned outline is open *while* the user types and every doc edit re-renders its rows, so without
+    it a long outline snapped back to the top on every keystroke. (2) The editor's `reposition()` now
+    re-applies the panel's width cap, so the legacy `panelMaxWidthFraction` cap follows a pane resize
+    instead of keeping the width it was built with. (3) The viewer registers a `resize` listener per
+    build (torn down with the strip), because the outline's width and room are a percentage of a pane
+    that moves. (4) Both containers are stamped with `data-expanded` / `data-pinned` at mount/build
+    rather than only on the first `expand()`/`collapse()`, so a reader can never mistake "not yet
+    touched" for "closed" — the viewer rebuilds its container wholesale, which made that difference
+    observable. Layout notes: pinned, the panel is
     `display:block; top:0; height:100%` of the container (which already spans the pane on both surfaces),
     the toolbar is `position:sticky` and full-bleed (negative side margins, the panel dropping its top
     padding), and the rows scroll under it; a pinned outline on a heading-less note keeps the toolbar and
@@ -207,7 +224,11 @@ touches your real Joplin profile.
     **Export → PDF**, **File → Print** and **Export → HTML**, so the strip — navigation, not content —
     would otherwise be baked into every exported document. `hostAvailable()` builds nothing when there
     is no `webviewApi` host bridge (there is none outside the live note viewer), and `viewer.css` adds
-    an independent `@media print` rule. Both layers are pinned by `e2e/export-print.spec.ts`.
+    an independent `@media print` rule. Both layers are pinned by `e2e/export-print.spec.ts`. That print
+    rule has a second half: hiding the strip leaves the GUTTER reserved for it, which would print as a
+    blank band — so `viewer.js` stamps `data-ridgeline-margin` on the body for exactly as long as it owns
+    that margin, and the print rule zeroes the body margin only for a body carrying that stamp, never a
+    margin somebody else set.
     It carries a second, independent **Rich Text (TinyMCE) editor guard** for the same reason. Joplin's
     Rich Text editor loads the very same MarkdownIt assets into its editor iframe and defines a
     `webviewApi` bridge there, so `hostAvailable()` alone is true inside it — but that document is

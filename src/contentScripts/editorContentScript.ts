@@ -275,6 +275,10 @@ class EditorStrip {
 		this.onVisibility = () => {
 			if (this.ownerDoc.visibilityState !== 'visible') {
 				this.cancelOpen();
+				// The same depart rule as a pointer leaving, but collapsing at once rather than on the
+				// grace: a hidden surface has nothing to be gentle about. A focused width field still holds.
+				if (this.isPinned() || this.holdOpen()) return;
+				this.closePopover();
 				if (this.expanded) this.collapse();
 			}
 		};
@@ -311,7 +315,10 @@ class EditorStrip {
 	// further mousemove will arrive in this document to drive it.
 	private departZone(): void {
 		this.cancelOpen();
-		if (this.expanded) this.scheduleCollapse();
+		// The pointer is no longer in this document at all, so any position we stored for it is stale —
+		// forget it, or releaseHold()/syncPinned() would later believe it is still resting on the outline.
+		this.lastPointer = null;
+		this.departHold();
 	}
 
 	// Issue #2: is the pointer, as last seen, still over the bars or the open outline?
@@ -965,11 +972,12 @@ class EditorStrip {
 			const parsed = Number(raw);
 			if (raw === '' || !Number.isFinite(parsed)) {
 				input.value = String(this.settings.outlineWidthPercent);
+				this.releaseHold();
 				return;
 			}
 			const next = Math.min(OUTLINE_WIDTH_MAX, Math.max(OUTLINE_WIDTH_MIN, Math.round(parsed)));
 			input.value = String(next);
-			this.closePopover();
+			this.releaseHold();
 			if (next !== this.settings.outlineWidthPercent) this.onSetSettings({ outlineWidthPercent: next });
 		};
 		input.addEventListener('keydown', (event: KeyboardEvent) => {
@@ -981,10 +989,16 @@ class EditorStrip {
 				applyInput();
 			} else if (event.key === 'Escape') {
 				event.preventDefault();
-				this.closePopover();
+				this.releaseHold();
 			}
 		});
-		input.addEventListener('blur', () => applyInput());
+		input.addEventListener('blur', (event: FocusEvent) => {
+			// A blur INTO another control of the same popover (clicking a preset) must not tear the popover
+			// down under the click — the preset's own handler closes it, after applying its value.
+			const next = event.relatedTarget as Node | null;
+			if (next && this.popover !== null && this.popover.contains(next)) return;
+			applyInput();
+		});
 		input.addEventListener('click', (event: MouseEvent) => event.stopPropagation());
 		pop.appendChild(input);
 		this.widthInput = input;
@@ -1044,10 +1058,34 @@ class EditorStrip {
 		return true;
 	}
 
-	// The hover outline must not collapse out from under an open popover or a field being typed into.
+	// The hover outline must not collapse out from under a field the user is TYPING INTO — that, and
+	// only that, is the hold. A merely-open popover does not hold it: it is dismissed the moment the
+	// pointer leaves (departHold below), so an outline can never be stranded open behind a popover
+	// nobody is using — which in the viewer, where no further mousemove and no Escape can reach the
+	// iframe once the pointer is out of it, would have left the outline over the note until the next
+	// rebuild.
 	private holdOpen(): boolean {
-		if (this.popover !== null) return true;
 		return this.widthInput !== null && this.ownerDoc.activeElement === this.widthInput;
+	}
+
+	// THE DEPART RULE, shared by every way the pointer can leave the bars/panel zone (a mousemove
+	// outside it, departZone's boundary events, a window blur, a visibility loss). Pinned is exempt
+	// entirely. A focused width field holds — until it applies or blurs, when releaseHold() picks the
+	// outline back up. Otherwise any open popover is dismissed and the normal collapse grace runs.
+	private departHold(): void {
+		if (this.isPinned()) return;
+		if (this.holdOpen()) return;
+		this.closePopover();
+		if (this.expanded) this.scheduleCollapse();
+	}
+
+	// The width field is finished with (Enter, Escape, or a blur): the typing hold is over, so dismiss
+	// the popover and — if the pointer has meanwhile wandered off the outline — hand it straight back
+	// to the normal collapse grace, which departHold could not start while the field held it.
+	private releaseHold(): void {
+		this.closePopover();
+		if (this.isPinned()) return;
+		if (this.expanded && !this.pointerOnStrip()) this.scheduleCollapse();
 	}
 
 	private scheduleUpdate(): void {
@@ -1154,7 +1192,7 @@ class EditorStrip {
 			else this.cancelOpen(); // a drag entered the zone — do not open
 		} else {
 			this.cancelOpen();
-			if (this.expanded) this.scheduleCollapse();
+			this.departHold();
 		}
 	}
 

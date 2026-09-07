@@ -84,6 +84,12 @@
 	var buildTimer = null;
 	var pollTimer = null;
 	var strip = null; // { el, scrollHandler, enter, leave, keydown }
+	// The last pointer position seen inside this iframe, and null once the pointer has left it (see
+	// departZone). Module-level ON PURPOSE: this strip is rebuilt from scratch on every settings change
+	// and every note render, and both readers of this value have to see across such a rebuild — the
+	// carry-open decision below, and releaseHold() deciding whether the outline is still under the
+	// pointer once a width field is finished with.
+	var lastPointer = null;
 
 	function tokenLength(level) {
 		var lengths = tokens.levelLengths || FALLBACK_TOKENS.levelLengths;
@@ -493,19 +499,41 @@
 	// outline covers the bars anyway, so reserving for both would double-count. outlineRoomPx() already
 	// returns 0 on a pane too narrow to leave a usable text column, and then the outline overlays, which
 	// is exactly what it does on hover today.
-	function applyReserveMargin() {
+	// The one place a body margin of ours is written or withdrawn. `px` of 0 clears it.
+	//
+	// It also STAMPS the body with data-ridgeline-margin while we own that margin, and removes the
+	// attribute when we give it back. That stamp is what viewer.css's @media print rule keys on: the
+	// print rule hides the strip, but the gutter reserved for it would otherwise print as a blank band
+	// down the page — 46px for the thin minimap margin, and up to nine tenths of the pane for a pinned
+	// outline's room. Keyed on the attribute, the rule can only ever undo a margin WE set, never a
+	// margin the note's own stylesheet or the user's userstyle put there.
+	function setBodyMargin(side, px) {
 		document.body.style.marginLeft = '';
 		document.body.style.marginRight = '';
-		var room = makeRoomOn() ? outlineRoomPx() : 0;
-		if (room > 0) {
-			if (settings.side === 'right') document.body.style.marginRight = room + 'px';
-			else document.body.style.marginLeft = room + 'px';
+		if (!px) {
+			document.body.removeAttribute('data-ridgeline-margin');
 			return;
 		}
-		if (settings.viewerMode !== 'reserve') return;
-		var pad = (stripTotalWidth() + tokens.edgeGapPx) + 'px';
-		if (settings.side === 'right') document.body.style.marginRight = pad;
-		else document.body.style.marginLeft = pad;
+		if (side === 'right') {
+			document.body.style.marginRight = px + 'px';
+			document.body.setAttribute('data-ridgeline-margin', 'right');
+		} else {
+			document.body.style.marginLeft = px + 'px';
+			document.body.setAttribute('data-ridgeline-margin', 'left');
+		}
+	}
+
+	function applyReserveMargin() {
+		var room = makeRoomOn() ? outlineRoomPx() : 0;
+		if (room > 0) {
+			setBodyMargin(settings.side, room);
+			return;
+		}
+		if (settings.viewerMode !== 'reserve') {
+			setBodyMargin(settings.side, 0);
+			return;
+		}
+		setBodyMargin(settings.side, stripTotalWidth() + tokens.edgeGapPx);
 	}
 
 	function pointInRect(x, y, rect, pad) {
@@ -550,7 +578,31 @@
 		strip = null;
 	}
 
+	// Was the outline the PREVIOUS strip showed open, with the pointer resting on it? Read off the DOM
+	// (rather than bookkept) so it needs nothing from the closure that is about to be thrown away, and
+	// necessarily BEFORE build() removes that element.
+	//
+	// This gives the viewer the editor's behaviour: there, the container is re-styled in place, so an
+	// outline the pointer is holding open survives a settings change — clicking the toolbar's own Pin
+	// button (or any other control) never yanks the panel out from under the pointer. Here the whole
+	// strip is rebuilt, so without this the outline would simply vanish mid-interaction, and with the
+	// minimap on the right the Pin button sits far from the bars, so nothing would reopen it. Pinned is
+	// excluded: `pinned` decides that case on its own.
+	function pointerHoldsOutlineOpen() {
+		if (!lastPointer) return false;
+		var existing = document.getElementById(STRIP_ID);
+		if (!existing) return false;
+		if (existing.getAttribute('data-expanded') !== 'true') return false;
+		if (existing.getAttribute('data-pinned') === 'true') return false;
+		var previousPanel = existing.querySelector('.ridgeline-panel');
+		if (!previousPanel) return false;
+		return pointInRect(lastPointer.x, lastPointer.y, previousPanel.getBoundingClientRect());
+	}
+
 	function build() {
+		// Must be measured while the OUTGOING strip is still in the document (see above).
+		var carryOpen = pointerHoldsOutlineOpen();
+
 		// Idempotent: remove any strip we (or a previous build) left behind.
 		var existing = document.getElementById(STRIP_ID);
 		if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
@@ -572,6 +624,10 @@
 		// Issue #2: resolved once per build — the strip is rebuilt whenever any of these changes, so the
 		// handlers below can close over the value instead of re-resolving it.
 		var pinned = isPinned();
+		// Open from the first frame: because it is pinned, or because the pointer was holding the previous
+		// outline open when this rebuild happened. In the second case the normal hover rules take over at
+		// once — the grace collapses it as soon as the pointer leaves.
+		var openAtBuild = pinned || (carryOpen && count > 0);
 
 		// Z2/W3: not shown — leave nothing mounted (all listeners torn down by teardown) and drop any
 		// reserve margin so the note text reclaims the space. Hidden when the master toggle is off, or
@@ -579,8 +635,7 @@
 		// a heading-less note (it shows its toolbar and a "No headings" placeholder), so it can always be
 		// unpinned in place. showMinimap=false still wins over everything.
 		if (!settings.showMinimap || (!pinned && settings.hideWhenEmpty && count === 0)) {
-			document.body.style.marginLeft = '';
-			document.body.style.marginRight = '';
+			setBodyMargin(settings.side, 0);
 			return;
 		}
 
@@ -595,8 +650,9 @@
 		// This whole strip is REBUILT on every settings change (unlike the editor's, which is re-styled in
 		// place), so the expanded state must be written at build time too — a rebuilt-but-untouched strip
 		// would otherwise carry no data-expanded at all until the first expand()/collapse(), and a reader
-		// could not tell "closed" from "not yet touched". Pinned, it is open from the moment it is built.
-		el.setAttribute('data-expanded', pinned ? 'true' : 'false');
+		// could not tell "closed" from "not yet touched". Pinned — or carried open under the pointer — it
+		// is open from the moment it is built.
+		el.setAttribute('data-expanded', openAtBuild ? 'true' : 'false');
 		var s = el.style;
 		s.position = 'fixed';
 		// R1: anchor the stack to the TOP of the pane (small offset), not vertically centred.
@@ -646,8 +702,9 @@
 		panel.className = 'ridgeline-panel';
 		var p = panel.style;
 		// Issue #2: PINNED, the outline is simply always open, docked at the full height of the pane (the
-		// container already spans it) with the rows scrolling inside.
-		p.display = pinned ? 'block' : 'none';
+		// container already spans it) with the rows scrolling inside. Carried open, it is an ordinary
+		// hover outline that simply starts out visible.
+		p.display = openAtBuild ? 'block' : 'none';
 		p.position = 'absolute';
 		p.top = '0';
 		p.maxHeight = '100%';
@@ -719,9 +776,13 @@
 		var widthInput = null;
 		var toolbarEl = null;
 
-		// The hover outline must not collapse out from under an open popover or a field being typed into.
+		// The hover outline must not collapse out from under a field the user is TYPING INTO — that, and
+		// only that, is the hold. A merely-open popover does not hold it: it is dismissed the moment the
+		// pointer leaves (departHold below). That matters most here: once the pointer is out of this
+		// iframe no further mousemove arrives and the Escape handler is bound to THIS window, so an
+		// outline stranded open behind an idle popover would sit over the note until the next rebuild.
 		function holdOpen() {
-			return popover !== null || (widthInput !== null && document.activeElement === widthInput);
+			return widthInput !== null && document.activeElement === widthInput;
 		}
 
 		// Returns whether a popover was actually closed, so Escape can stop at the popover.
@@ -733,6 +794,31 @@
 			widthInput = null;
 			if (pop.parentNode) pop.parentNode.removeChild(pop);
 			return true;
+		}
+
+		// THE DEPART RULE, shared by every way the pointer can leave the bars/panel zone (a mousemove
+		// outside it, departZone's boundary events, a window blur, a visibility loss). Pinned is exempt
+		// entirely. A focused width field holds — until it applies or blurs, when releaseHold() picks the
+		// outline back up. Otherwise any open popover is dismissed and the normal collapse grace runs.
+		function departHold() {
+			if (pinned) return;
+			if (holdOpen()) return;
+			closePopover();
+			if (expanded) scheduleCollapse();
+		}
+
+		// The width field is finished with (Enter, Escape, or a blur): the typing hold is over, so dismiss
+		// the popover and — if the pointer has meanwhile wandered off the outline, or out of this iframe
+		// altogether (lastPointer null) — hand it straight back to the normal collapse grace, which
+		// departHold could not start while the field held it.
+		function releaseHold() {
+			closePopover();
+			if (pinned) return;
+			var onOutline = lastPointer !== null && (
+				pointInRect(lastPointer.x, lastPointer.y, barsWrap.getBoundingClientRect()) ||
+				pointInRect(lastPointer.x, lastPointer.y, panel.getBoundingClientRect())
+			);
+			if (expanded && !onOutline) scheduleCollapse();
 		}
 
 		// Every toolbar/popover click is swallowed: the toolbar sits INSIDE the panel, whose rows and bars
@@ -811,10 +897,14 @@
 				if (!input.isConnected) return;
 				var raw = String(input.value).trim();
 				var parsed = Number(raw);
-				if (raw === '' || !isFinite(parsed)) { input.value = String(settings.outlineWidthPercent); return; }
+				if (raw === '' || !isFinite(parsed)) {
+					input.value = String(settings.outlineWidthPercent);
+					releaseHold();
+					return;
+				}
 				var next = Math.min(OUTLINE_WIDTH_MAX, Math.max(OUTLINE_WIDTH_MIN, Math.round(parsed)));
 				input.value = String(next);
-				closePopover();
+				releaseHold();
 				if (next !== settings.outlineWidthPercent) sendSettings({ outlineWidthPercent: next });
 			};
 			input.addEventListener('keydown', function (event) {
@@ -822,9 +912,15 @@
 				// popover and leaves the outline exactly as it was.
 				event.stopPropagation();
 				if (event.key === 'Enter') { event.preventDefault(); applyInput(); }
-				else if (event.key === 'Escape') { event.preventDefault(); closePopover(); }
+				else if (event.key === 'Escape') { event.preventDefault(); releaseHold(); }
 			});
-			input.addEventListener('blur', function () { applyInput(); });
+			input.addEventListener('blur', function (event) {
+				// A blur INTO another control of the same popover (clicking a preset) must not tear the
+				// popover down under the click — the preset's own handler closes it, after applying.
+				var next = event.relatedTarget;
+				if (next && popover !== null && popover.contains(next)) return;
+				applyInput();
+			});
 			input.addEventListener('click', function (event) { event.stopPropagation(); });
 			pop.appendChild(input);
 			widthInput = input;
@@ -1079,7 +1175,7 @@
 
 		// Issue #2: pinned, the outline starts open and stays open — the hover-intent timer, the collapse
 		// grace, departZone, blur/visibility and Escape are all held off below.
-		var expanded = pinned;
+		var expanded = openAtBuild;
 		var collapseTimer = null;
 		var openTimer = null;
 		function cancelOpen() {
@@ -1124,6 +1220,9 @@
 		// cancels it, so dragging a selection across the minimap neither opens the panel nor blocks the
 		// selection. Once open, staying over the bars/panel keeps it open (cancels the collapse grace).
 		var pointermove = function (event) {
+			// Recorded before any early return, and module-level so it outlives this build: releaseHold()
+			// and the next build's carry-open decision both read it.
+			lastPointer = { x: event.clientX, y: event.clientY };
 			// Issue #2: a PINNED outline is not driven by hover at all — nothing to arm, nothing to collapse.
 			if (pinned) { cancelCollapse(); return; }
 			if (count === 0) return;
@@ -1136,13 +1235,20 @@
 				else cancelOpen();
 			} else {
 				cancelOpen();
-				if (expanded) scheduleCollapse();
+				departHold();
 			}
 		};
 		// Z3: the pointer left our surface (out of the note iframe into the main window, into another
 		// iframe, or out of the window). Cancel the dwell timer and start the close grace even though no
 		// further mousemove will arrive here to drive it.
-		function departZone() { cancelOpen(); if (expanded) scheduleCollapse(); }
+		function departZone() {
+			cancelOpen();
+			// The pointer is no longer in this document at all, so any position we stored for it is stale —
+			// forget it, or releaseHold() (and the carry-open decision on the next rebuild) would later
+			// believe it is still resting on the outline.
+			lastPointer = null;
+			departHold();
+		}
 		var docleave = function () { departZone(); };
 		// Mirror of the editor fix: a mouseout whose relatedTarget is null (left the iframe document into
 		// the main window / a foreign context) or an IFRAME element. Internal moves carry a real
@@ -1152,7 +1258,15 @@
 			if (rt === null || (rt && rt.tagName === 'IFRAME')) departZone();
 		};
 		var winblur = function () { departZone(); };
-		var visibility = function () { if (document.visibilityState !== 'visible') { cancelOpen(); if (expanded) collapse(); } };
+		var visibility = function () {
+			if (document.visibilityState === 'visible') return;
+			cancelOpen();
+			// The same depart rule as a pointer leaving, but collapsing at once rather than on the grace:
+			// a hidden surface has nothing to be gentle about. A focused width field still holds.
+			if (pinned || holdOpen()) return;
+			closePopover();
+			if (expanded) collapse();
+		};
 		var keydown = function (event) {
 			if (event.key !== 'Escape') return;
 			// Issue #2: Escape closes an open toolbar popover FIRST and stops there; a pinned outline is
@@ -1177,9 +1291,9 @@
 		document.body.appendChild(el);
 		applyReserveMargin();
 		updateActive();
-		// Issue #2: pinned, the panel is open from the moment it is built (its display and data-expanded
-		// were set above), so the current row is brought into view exactly as an expand() would.
-		if (pinned && activeIndex >= 0 && rows[activeIndex]) {
+		// Issue #2: open from the moment it is built (its display and data-expanded were set above), so
+		// the current row is brought into view exactly as an expand() would.
+		if (openAtBuild && activeIndex >= 0 && rows[activeIndex]) {
 			rows[activeIndex].scrollIntoView({ block: 'nearest' });
 		}
 

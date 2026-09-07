@@ -30,4 +30,18 @@
 	.ridgeline-viewer-strip {
 		display: none !important;
 	}
+
+	/* Hiding the strip is only half of it: the GUTTER reserved for it stays. viewer.js keeps the note
+	 * text clear of the bars (the thin minimap margin, ~46px) and, since the outline can be pinned, of
+	 * the pinned outline itself (its "room", up to nine tenths of the pane) with a margin on <body>.
+	 * Printed, that margin is a blank band down every page for something that is no longer drawn.
+	 *
+	 * viewer.js stamps `data-ridgeline-margin` on the body for exactly as long as it owns that margin
+	 * and removes it when it gives it back, so this rule can only ever undo OUR gutter — a margin the
+	 * note's own stylesheet, a userstyle or the exporter set is never touched, and a printed page with
+	 * no Ridgeline margin matches this selector not at all. */
+	body[data-ridgeline-margin] {
+		margin-left: 0 !important;
+		margin-right: 0 !important;
+	}
 }

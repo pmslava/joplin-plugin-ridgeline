@@ -59,8 +59,8 @@ async function registerSettings(): Promise<void> {
 			isEnum: true,
 			public: true,
 			section: SETTINGS_SECTION,
-			label: 'Strip side',
-			description: 'Which edge of the editor/viewer the strip sits on.',
+			label: 'Minimap side',
+			description: 'Which edge of the editor/viewer the minimap sits on.',
 			options: { left: 'Left', right: 'Right' },
 			// File storage so the value persists AND can be seeded via a profile settings.json.
 			storage: SettingStorage.File,
@@ -438,7 +438,8 @@ joplin.plugins.register({
 		// onChange above and both surfaces update without a relaunch.
 		await joplin.commands.register({
 			name: TOGGLE_SIDE_COMMAND,
-			label: 'Ridgeline: Toggle strip side (left/right)',
+			// The command NAME (TOGGLE_SIDE_COMMAND) is unchanged — only the label the user reads.
+			label: 'Ridgeline: Toggle minimap side (left/right)',
 			execute: async () => {
 				const current = await joplin.settings.value(SETTING_SIDE);
 				await joplin.settings.setValue(SETTING_SIDE, current === 'right' ? 'left' : 'right');
