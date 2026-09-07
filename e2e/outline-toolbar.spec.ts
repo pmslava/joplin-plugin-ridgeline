@@ -383,9 +383,10 @@ async function expectViewerWidthSetting(frame: Frame, pct: number): Promise<void
 
 /**
  * The content-fit rule, identical for the hover outline and the pinned one: never wider than the width
- * percentage (its `max-width` cap, published as `data-outline-width`), never narrower than the 140px
- * floor, and never narrower than its own toolbar row (when the surface has one — the row must not be
- * clipped). It may legitimately be much narrower than the cap: these headings are short.
+ * percentage (its `max-width` cap, published as `data-outline-width`) unless its own toolbar row is
+ * wider, never narrower than the 140px floor, and never narrower than that toolbar row (when the
+ * surface has one — the row must not wrap or be clipped). It may legitimately be much narrower than
+ * the cap: these headings are short.
  */
 function expectContentFit(
   width: number,
@@ -396,8 +397,11 @@ function expectContentFit(
 ): void {
   expect(width, `${where}: rendered`).toBeGreaterThan(0);
   expect(Number.isFinite(cap), `${where}: the minimap publishes data-outline-width`).toBe(true);
-  expect(width, `${where}: content-fit, capped at ${cap}px`).toBeLessThanOrEqual(
-    cap + PINNED_WIDTH_TOL_PX
+  // The toolbar row is a FLOOR that wins over the cap: at a small percentage on a narrow pane (10% of a
+  // ~700px pane is the 140px floor) the three buttons still get their one row (~150px), so the outline
+  // may exceed the cap by exactly that much and no more.
+  expect(width, `${where}: content-fit, capped at ${cap}px (or its ${toolbarW}px toolbar row)`).toBeLessThanOrEqual(
+    Math.max(cap, toolbarW) + PINNED_WIDTH_TOL_PX
   );
   expect(width, `${where}: never narrower than the ${OUTLINE_MIN_WIDTH_PX}px floor`).toBeGreaterThanOrEqual(
     Math.min(OUTLINE_MIN_WIDTH_PX, paneW) - PINNED_WIDTH_TOL_PX
