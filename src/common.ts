@@ -38,6 +38,12 @@ export const TOGGLE_HIDE_WHEN_EMPTY_COMMAND = 'ridgeline.toggleHideWhenEmpty';
 // outline with no toolbar simply shows its rows, and the same accelerator unpins it again.
 export const TOGGLE_PIN_COMMAND = 'ridgeline.togglePin';
 
+// Outline toolbar: plugin command (Tools → Ridgeline submenu + accelerator Ctrl+Alt+O) that flips
+// "Make room for the pinned outline", so the pinned outline can be switched between pushing the note
+// text aside and overlaying it without a trip to the Settings screen. Ctrl+Alt+O is free in Joplin
+// 3.7.6's default keymap (its only Ctrl+Alt+* bindings are -, T, S, 1, 2, 3 and N).
+export const TOGGLE_MAKE_ROOM_COMMAND = 'ridgeline.toggleMakeRoom';
+
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
 // in a profile's settings.json and survive restarts.
 export const SETTING_SIDE = 'side';
@@ -83,7 +89,8 @@ export const SETTING_OUTLINE_TOOLBAR = 'outlineToolbar';
 export const SETTING_OUTLINE_WIDTH_PERCENT = 'outlineWidthPercent';
 // Keep the outline open at full pane height until unpinned (persisted, so a pin survives a restart).
 export const SETTING_OUTLINE_PINNED = 'outlinePinned';
-// While pinned, push the note text aside by the outline's width instead of overlaying it.
+// While pinned, push the note text aside by the outline's width instead of overlaying it. Flipped from
+// the Settings screen or by TOGGLE_MAKE_ROOM_COMMAND (Ctrl+Alt+O).
 export const SETTING_OUTLINE_MAKE_ROOM = 'outlineMakeRoom';
 
 // The width percent's bounds/default and the toolbar's three presets. Mirrored in viewer.js (which

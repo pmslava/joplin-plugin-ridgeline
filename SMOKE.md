@@ -136,6 +136,9 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       (**Make room for the pinned outline**, default on). Press **Ctrl+Alt+P** again: it goes back to a
       hover outline and the text reclaims the space. All three settings work from the Settings screen
       with the toolbar off — the toolbar only offers a second way to reach them.
+- [ ] **Room on and off.** With the outline pinned, run **Tools → Ridgeline → Ridgeline: Toggle room for
+      the pinned outline** (accelerator **Ctrl+Alt+O**). The note text stops being pushed aside and the
+      pinned outline **overlays** it instead; run it again and the room comes back. Both surfaces, live.
 - [ ] **The toolbar.** Turn **Show the outline toolbar** *on* and open the outline: its first row is
       **Width**, **Headings** and **Pin**, all the same height, never wrapping. Width offers 25 / 33 /
       50 % and a field for any value from 10 to 90; Headings offers 1 … 1–6 and filters both surfaces;

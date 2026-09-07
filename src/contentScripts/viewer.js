@@ -252,38 +252,64 @@
 	var TOOLBAR_PADDING_X_PX = 6;
 	var TOOLBAR_GAP_PX = 6;
 
-	// Issue #2 — the toolbar's icons, from Lucide (https://lucide.dev, ISC licence): `move-horizontal`
-	// for Width, `heading` for Headings, `pin` for Pin. Path data copied verbatim and drawn on Lucide's
-	// own canvas (24×24 viewBox, no fill, currentColor stroke, width 2, round caps and joins) at a 14px
-	// box. The same three strings are in editorContentScript.ts — keep them in sync.
-	var ICON_WIDTH = ['m18 8 4 4-4 4', 'M2 12h20', 'm6 8-4 4 4 4'];
-	var ICON_HEADINGS = ['M6 12h12', 'M6 20V4', 'M18 20V4'];
-	var ICON_PIN = [
-		'M12 17v5',
-		'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z',
-	];
+	// Issue #2 — the toolbar's icons, mirrored from editorContentScript.ts (keep them in sync). Width and
+	// Pin are Lucide's (https://lucide.dev, ISC licence) `move-horizontal` and `pin`, drawn on Lucide's
+	// own canvas (24×24 viewBox, no fill, currentColor stroke, width 2, round caps and joins) at 14px.
+	//
+	// Headings is instead a SOLID glyph — Font Awesome Free 5's "heading" (CC BY 4.0,
+	// https://fontawesome.com/license/free) — because that is the H Joplin's own toolbar draws, and a
+	// stroked H read as a poorly-drawn one beside it. Being solid it is far heavier per px than a Lucide
+	// stroke, so it is rendered at 12px rather than 14: that gives its ink the SAME height (10.5px) as
+	// the stroked heading it replaces, and keeps it close to the cap height of the "1–6" label beside it.
+	var ICON_PX = 14;
+	var ICON_WIDTH = {
+		box: '0 0 24 24',
+		paths: ['m18 8 4 4-4 4', 'M2 12h20', 'm6 8-4 4 4 4'],
+	};
+	var ICON_HEADINGS = {
+		box: '0 0 512 512',
+		solid: true,
+		px: 12,
+		paths: [
+			'M448 96v320h32a16 16 0 0 1 16 16v32a16 16 0 0 1-16 16H320a16 16 0 0 1-16-16v-32a16 16 0 0 1 16-16h32V288H160v128h32a16 16 0 0 1 16 16v32a16 16 0 0 1-16 16H32a16 16 0 0 1-16-16v-32a16 16 0 0 1 16-16h32V96H32a16 16 0 0 1-16-16V48a16 16 0 0 1 16-16h160a16 16 0 0 1 16 16v32a16 16 0 0 1-16 16h-32v128h192V96h-32a16 16 0 0 1-16-16V48a16 16 0 0 1 16-16h160a16 16 0 0 1 16 16v32a16 16 0 0 1-16 16z',
+		],
+	};
+	var ICON_PIN = {
+		box: '0 0 24 24',
+		paths: [
+			'M12 17v5',
+			'M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z',
+		],
+	};
 
-	// An inline SVG icon at an exact 14×14 box. NOT Font Awesome: Joplin's icon font is chrome and is
-	// not guaranteed inside this iframe, so the toolbar draws its own. `filled` is the PRESSED pin.
-	function svgIcon(paths, filled) {
+	// An inline SVG icon at an exact integer box. The paths are inlined rather than taken from an icon
+	// FONT because Joplin's own icon font is chrome and is not guaranteed inside this iframe, so the
+	// toolbar draws its own. `filled` is the PRESSED pin.
+	function svgIcon(spec, filled) {
 		var NS = 'http://www.w3.org/2000/svg';
 		var svg = document.createElementNS(NS, 'svg');
-		svg.setAttribute('viewBox', '0 0 24 24');
-		svg.setAttribute('width', '14');
-		svg.setAttribute('height', '14');
-		svg.setAttribute('fill', filled ? 'currentColor' : 'none');
-		svg.setAttribute('stroke', 'currentColor');
-		svg.setAttribute('stroke-width', '2');
-		svg.setAttribute('stroke-linecap', 'round');
-		svg.setAttribute('stroke-linejoin', 'round');
+		var px = typeof spec.px === 'number' ? spec.px : ICON_PX;
+		svg.setAttribute('viewBox', spec.box);
+		svg.setAttribute('width', String(px));
+		svg.setAttribute('height', String(px));
+		if (spec.solid) {
+			// A glyph, not a drawing: it IS its fill, and a stroke on top would fatten it further.
+			svg.setAttribute('fill', 'currentColor');
+		} else {
+			svg.setAttribute('fill', filled ? 'currentColor' : 'none');
+			svg.setAttribute('stroke', 'currentColor');
+			svg.setAttribute('stroke-width', '2');
+			svg.setAttribute('stroke-linecap', 'round');
+			svg.setAttribute('stroke-linejoin', 'round');
+		}
 		svg.setAttribute('aria-hidden', 'true');
 		svg.style.flex = '0 0 auto';
-		svg.style.width = '14px';
-		svg.style.height = '14px';
+		svg.style.width = px + 'px';
+		svg.style.height = px + 'px';
 		svg.style.verticalAlign = 'middle';
-		for (var i = 0; i < paths.length; i++) {
+		for (var i = 0; i < spec.paths.length; i++) {
 			var path = document.createElementNS(NS, 'path');
-			path.setAttribute('d', paths[i]);
+			path.setAttribute('d', spec.paths[i]);
 			svg.appendChild(path);
 		}
 		return svg;
@@ -1067,7 +1093,8 @@
 			onToolbarClick(width, function () { togglePopover('width'); });
 			bar.appendChild(width);
 
-			// HEADINGS — Lucide's heading (which draws the H) + the depth range as bare numbers.
+			// HEADINGS — the solid H glyph (Joplin's own toolbar draws the same one) + the depth range as
+			// bare numbers, since the icon already says H.
 			var headingsButton = toolbarButton(
 				colors,
 				'ridgeline-tb-headings',

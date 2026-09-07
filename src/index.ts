@@ -29,6 +29,7 @@ import {
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
 	TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
+	TOGGLE_MAKE_ROOM_COMMAND,
 	TOGGLE_MINIMAP_COMMAND,
 	TOGGLE_PIN_COMMAND,
 	TOGGLE_SIDE_COMMAND,
@@ -500,9 +501,23 @@ joplin.plugins.register({
 			},
 		});
 
-		// One "Ridgeline" submenu under Tools holding all four toggles, instead of four top-level Tools
+		// Issue #2: flip "Make room for the pinned outline" live (Ctrl+Alt+O or the Tools → Ridgeline
+		// submenu), so the pinned outline can be switched between pushing the note text aside and
+		// overlaying it without a trip to the Settings screen. It only takes effect while something is
+		// pinned; flipping it on a hover outline changes nothing until the outline is pinned.
+		await joplin.commands.register({
+			name: TOGGLE_MAKE_ROOM_COMMAND,
+			label: 'Ridgeline: Toggle room for the pinned outline',
+			execute: async () => {
+				const current = await joplin.settings.value(SETTING_OUTLINE_MAKE_ROOM);
+				await joplin.settings.setValue(SETTING_OUTLINE_MAKE_ROOM, current === false);
+			},
+		});
+
+		// One "Ridgeline" submenu under Tools holding all five toggles, instead of five top-level Tools
 		// items. Created here, after the last commands.register, because the leaves are resolved through
-		// CommandService when the menu bar builds, so all four commands are registered first.
+		// CommandService when the menu bar builds, so all five commands are registered first. Each flips
+		// one setting: `side`, `showMinimap`, `hideWhenEmpty`, `outlinePinned`, `outlineMakeRoom`.
 		//
 		// The entries render with their FULL command labels ("Ridgeline: Toggle minimap", …), so the menu
 		// reads Tools → Ridgeline → Ridgeline: Toggle minimap. A per-item `label` cannot shorten them,
@@ -525,6 +540,7 @@ joplin.plugins.register({
 				{ commandName: TOGGLE_MINIMAP_COMMAND, accelerator: 'Ctrl+Alt+M' },
 				{ commandName: TOGGLE_HIDE_WHEN_EMPTY_COMMAND, accelerator: 'Ctrl+Alt+H' },
 				{ commandName: TOGGLE_PIN_COMMAND, accelerator: 'Ctrl+Alt+P' },
+				{ commandName: TOGGLE_MAKE_ROOM_COMMAND, accelerator: 'Ctrl+Alt+O' },
 			],
 			MenuItemLocation.Tools,
 		);

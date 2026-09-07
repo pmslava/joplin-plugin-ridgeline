@@ -65,8 +65,9 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 | **Ridgeline: Toggle minimap side (left/right)** | `Ctrl+Alt+R` | — |
 | **Ridgeline: Toggle hide-when-empty** | `Ctrl+Alt+H` | — |
 | **Ridgeline: Toggle outline pin** | `Ctrl+Alt+P` | Also the Pin button in the outline toolbar, and the *Pin the outline open* setting — all three flip the same thing, with or without the toolbar. |
+| **Ridgeline: Toggle room for the pinned outline** | `Ctrl+Alt+O` | Flips *Make room for the pinned outline*: the pinned outline either pushes the note text aside or overlays it. Takes effect while something is pinned. |
 
-All four also sit together in the **Tools → Ridgeline** submenu, listed there under the same full
+All five also sit together in the **Tools → Ridgeline** submenu, listed there under the same full
 names as above (Joplin labels a plugin menu entry from its command, so the `Ridgeline:` prefix is
 repeated inside the submenu). Each flips the matching setting, so both panes update live.
 

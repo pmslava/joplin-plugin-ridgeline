@@ -148,7 +148,10 @@ touches your real Joplin profile.
 ## Repository layout
 
 - `src/` — the plugin source.
-  - `index.ts` — plugin entry point: registers settings, commands, and the coordinator. The coordinator
+  - `index.ts` — plugin entry point: registers settings, the five Tools → Ridgeline toggle commands
+    (`side`, `showMinimap`, `hideWhenEmpty`, `outlinePinned`, `outlineMakeRoom` — `Ctrl+Alt+R`, `M`, `H`,
+    `P`, `O`; all five accelerators verified free in Joplin 3.7.6, whose only `Ctrl+Alt+*` defaults are
+    `-`, `T`, `S`, `1`, `2`, `3` and `N`), and the coordinator. The coordinator
     answers three content-script messages: `getSettings` (the resolved settings + the design tokens),
     `jump`, and `setSettings` — the outline toolbar writing a setting back. `setSettings` is guarded by
     an **allowlist of exactly three keys** (`outlinePinned`, `outlineWidthPercent`, `maxDepth`), written
