@@ -327,6 +327,12 @@ async function openToolbarPopover(win: Page, which: 'width' | 'headings'): Promi
     // Already open (or reopened by a rebuild): clicking again would TOGGLE it shut.
     if (await popover.first().isVisible().catch(() => false)) break;
     try {
+      // The outline may have collapsed under the pointer since the caller opened it (a grace collapse
+      // that raced a re-render, or a departure the hit-test saw first); a hidden button can never be
+      // clicked, so re-open the outline before each attempt rather than burning the attempt on it.
+      if ((await win.locator(EDITOR_STRIP).getAttribute('data-expanded')) !== 'true') {
+        await openEditorOutline(win);
+      }
       await parkPointerInEditorPanel(win);
       await button.click({ timeout: POPOVER_OPEN_TIMEOUT_MS });
       await expect(popover).toBeVisible({ timeout: POPOVER_OPEN_TIMEOUT_MS });
