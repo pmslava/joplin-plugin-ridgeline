@@ -670,6 +670,84 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     await movePointerToNoteList(win);
   });
 
+  // Contract (review fix 15c498c) — an open popover must NOT strand the hover outline. A merely-open
+  // popover holds nothing: when the pointer leaves the bars/panel the popover closes and the ordinary
+  // collapse grace runs. Only a FOCUSED width field holds the outline (B7b). Pinned is exempt, so both
+  // of these run with the outline explicitly UNPINNED.
+  test('B7a: an open popover does not hold the hover outline once the pointer leaves', async () => {
+    const { win } = joplin;
+    const strip = win.locator(EDITOR_STRIP);
+    await ensurePinned(win, frame, false);
+
+    await openEditorOutline(win);
+    // Open the Width popover and go no further — the input is deliberately NOT focused (clicking the
+    // toolbar button focuses the BUTTON, which must not hold the outline either).
+    const popover = await openWidthPopover(win);
+    await expect(popover).toBeVisible();
+
+    // The pointer leaves for the note list. No click, so nothing but the departure itself closes this.
+    await movePointerToNoteList(win);
+    await expect(strip).toHaveAttribute('data-expanded', 'false', { timeout: 5_000 });
+    await expect(popover).toBeHidden();
+    await expect(win.locator(EDITOR_PANEL)).toBeHidden();
+
+    // The same rule in the viewer. helpers.ts has no viewer-hover helper (only hoverEditorBars), so the
+    // viewer bars are hovered through the frame locator, as A1/B1 already do in this file.
+    const viewerBars = frame.locator(`${VIEWER_STRIP} .ridgeline-bars`);
+    await expect(viewerBars).toBeVisible({ timeout: 20_000 });
+    await viewerBars.hover();
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-expanded', 'true', {
+      timeout: 10_000,
+    });
+    await frame.locator(`${VIEWER_PANEL} ${tb('viewer', 'width')}`).click();
+    const viewerPopover = frame.locator(`${VIEWER_PANEL} ${WIDTH_POPOVER}`);
+    await expect(viewerPopover).toBeVisible({ timeout: 10_000 });
+
+    await movePointerToNoteList(win);
+    await expect(frame.locator(VIEWER_STRIP)).toHaveAttribute('data-expanded', 'false', {
+      timeout: 10_000,
+    });
+    await expect(viewerPopover).toBeHidden();
+  });
+
+  // Contract (review fix 15c498c) — the ONE thing that does hold the hover outline open is a focused
+  // width field (typing a value must not be interrupted by the pointer wandering off). Finishing the
+  // field — here with Enter — closes the popover and releases the hold, so the ordinary grace collapse
+  // runs because the pointer is no longer over the bars/panel.
+  test('B7b: a focused width field holds the outline; finishing it releases', async () => {
+    const { win } = joplin;
+    const strip = win.locator(EDITOR_STRIP);
+    await ensurePinned(win, frame, false);
+
+    await openEditorOutline(win);
+    const popover = await openWidthPopover(win);
+    const input = popover.locator(WIDTH_INPUT);
+    // Focus the field WITHOUT typing: the value must stay at its current 33 throughout.
+    await input.click();
+    await expect(input).toBeFocused();
+
+    // Pointer away (a move, never a click, so focus stays in the field). Well past the ~200ms grace the
+    // outline must still be open — held by the focused input alone.
+    await movePointerToNoteList(win);
+    await win.waitForTimeout(1500);
+    expect(
+      await strip.getAttribute('data-expanded'),
+      'a focused width field holds the hover outline open'
+    ).toBe('true');
+    await expect(win.locator(EDITOR_PANEL)).toBeVisible();
+    await expect(popover).toBeVisible();
+
+    // Finish the field. The value is unchanged, so the width stays where it was; the popover closes and
+    // the hold is released, so the outline collapses on the grace.
+    await win.keyboard.press('Enter');
+    await expect(strip).toHaveAttribute('data-expanded', 'false', { timeout: 5_000 });
+    await expect(popover).toBeHidden();
+    await expect(win.locator(EDITOR_PANEL)).toBeHidden();
+
+    // Left exactly as found: still the default 33%.
+    await expectEditorWidthSetting(win, OUTLINE_WIDTH_DEFAULT);
+  });
+
   // Contract B(4a) — the Pin button: the outline docks at exactly the published width, takes the full
   // height of the pane, never closes, keeps its rounded border (so the seam between note and outline
   // stays visible), and the viewer pins too.
