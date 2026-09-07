@@ -1386,7 +1386,11 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 			void (async () => {
 				try {
 					const response = (await context.postMessage({ type: 'setSettings', values })) as SettingsResponse | null;
-					if (response) applySettingsResponse(response, true);
+					// Also idempotent, for the same reason and for the other arrival order: the answer and the
+					// onChange push race back here, and whichever lands first applies the change while the
+					// second is a no-op. It still applies INSTANTLY in the normal case — the answer carries a
+					// value this strip has not seen, so its signature differs and the guard lets it through.
+					if (response) applySettingsResponse(response, false);
 				} catch (error) {
 					console.warn('[ridgeline] setSettings failed', error);
 				}
@@ -1431,7 +1435,8 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		let settingsSig = '';
 
 		// Apply a fetched/pushed settings response: re-theme (reserve margin) and mount/unmount/re-render
-		// the strip. Idempotent via the signature guard when `force` is false.
+		// the strip. Idempotent via the signature guard when `force` is false — which is every caller now
+		// except the FIRST apply on mount, where the strip has to be built whatever the signature says.
 		const applySettingsResponse = (payload: SettingsResponse | null | undefined, force: boolean): void => {
 			const next = coerceSettings(payload);
 			const nextTokens = payload && payload.tokens ? payload.tokens : currentTokens;
@@ -1447,8 +1452,16 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 
 		// Live settings PUSH: the coordinator calls this on joplin.settings.onChange for the FOCUSED
 		// window, so the strip re-themes / re-sides / re-filters / shows / hides instantly, no relaunch.
+		//
+		// IDEMPOTENT (not forced): a change the toolbar itself made has already been applied from the
+		// setSettings answer, and the onChange push then arrives a few ms later carrying the IDENTICAL
+		// settings. Forcing re-rendered the outline a second time for one change — a flicker for a human,
+		// and a real bug for anything that had opened a toolbar popover in between, since a re-render
+		// rebuilds the panel's children and closes it. The signature covers every field of the settings
+		// AND the tokens, so a push that changes nothing is precisely a push there is nothing to do for;
+		// anything genuinely new (including a showMinimap flip that must remount the strip) changes it.
 		editorControl.registerCommand(EDITOR_APPLY_SETTINGS_COMMAND, (payload: SettingsResponse) => {
-			applySettingsResponse(payload, true);
+			applySettingsResponse(payload, false);
 		});
 
 		// Live settings POLL (multi-window backstop): editor.execCommand only reaches the focused
