@@ -148,7 +148,14 @@ touches your real Joplin profile.
 ## Repository layout
 
 - `src/` — the plugin source.
-  - `index.ts` — plugin entry point: registers settings, commands, and the coordinator.
+  - `index.ts` — plugin entry point: registers settings, commands, and the coordinator. The coordinator
+    answers three content-script messages: `getSettings` (the resolved settings + the design tokens),
+    `jump`, and `setSettings` — the outline toolbar writing a setting back. `setSettings` is guarded by
+    an **allowlist of exactly three keys** (`outlinePinned`, `outlineWidthPercent`, `maxDepth`), written
+    as three literal `in` checks so no key from the payload is ever used to address a setting; each value
+    is coerced there exactly as `readSettings` coerces the stored one, and the answer is a fresh
+    settings response the calling surface applies at once (the other surface and other windows pick the
+    change up through the usual `onChange` push / 700 ms poll).
   - `headings.ts` — the editor-side heading parser: a line scan for BLOCK structure (fences, HTML
     comment blocks, ATX indent limits, setext underlines) plus the slug and its duplicate suffix. That
     scan also collects the note's `[^label]:` footnote definitions and its `[label]: destination` link
@@ -160,9 +167,35 @@ touches your real Joplin profile.
     stream Joplin slugifies; the single source for both the label the strip shows and the anchor it
     jumps to. Pure, dependency-free, and pinned by `npm run test:headings`.
   - `tokens.ts` — the single file of design tokens (bar lengths per level, thickness, gaps, hover-panel
-    sizing, colour opacity). Change a number here, rebuild, and both surfaces update.
-  - `common.ts` — shared helpers.
-  - `contentScripts/` — the CodeMirror editor extension and the rendered-viewer script. `viewer.js` is
+    sizing, colour opacity, and the outline's geometry: its min width, its max fraction of the pane, the
+    text column that must survive beside a pinned one, the air between the text and its border). Change
+    a number here, rebuild, and both surfaces update. It also holds the two width resolvers —
+    `outlineWidthPx()` (percent of the pane, clamped) and `outlineRoomPx()` (that width plus the edge
+    inset and the air, or 0 when the pane is too narrow) — mirrored in `viewer.js`.
+  - `common.ts` — shared constants, message types and the ONE effective-state resolver
+    (`outlineToolbarOn` / `outlinePinnedOn` / `outlineMakeRoomOn`), so both surfaces decide "toolbar on /
+    pinned / making room" the same way. Note the two DISTINCT margins it names: the **minimap margin**
+    (`editorMode`/`viewerMode` = `reserve`) is the thin one that only clears the bars, while the
+    **outline room** is the wide one a *pinned* outline gets from `outlineMakeRoom`. The room supersedes
+    the thin margin rather than adding to it — the pinned outline covers the bars anyway. User-facing
+    wording (labels, descriptions, README) says **minimap**, never "strip"; the code keeps its older
+    `strip` identifiers, CSS classes and `data-testid`s, which must not be renamed.
+  - `contentScripts/` — the CodeMirror editor extension and the rendered-viewer script. Both draw the
+    **outline toolbar** (issue #2): an optional first row inside `.ridgeline-panel` — `.ridgeline-toolbar`
+    with `.ridgeline-tb-width` / `.ridgeline-tb-headings` / `.ridgeline-tb-pin`, and a
+    `.ridgeline-tb-popover` that opens INSIDE the panel (so the hover hit-test on the panel's own rect
+    keeps the outline open while it is used). The two implementations are deliberate mirrors, not shared
+    code: identical class names, behaviour and layout, with the `data-testid` prefixed per surface. With
+    `outlineToolbar` off every path in both files behaves exactly as it did before the toolbar existed —
+    that regression contract is what keeps the older specs green. Layout notes: pinned, the panel is
+    `display:block; top:0; height:100%` of the container (which already spans the pane on both surfaces),
+    the toolbar is `position:sticky` and full-bleed (negative side margins, the panel dropping its top
+    padding), and the rows scroll under it; a pinned outline on a heading-less note keeps the toolbar and
+    shows a single `.ridgeline-panel-empty` row so it can be unpinned in place. The editor's outline room
+    lives in the reserve `Compartment`, and reconfiguring it DISPATCHES — so, exactly like `applyVisibility`,
+    it is deferred out of any CodeMirror update (and out of the ResizeObserver callback) with a
+    `setTimeout 0`, and only when the computed px actually changed; the viewer sets `document.body`'s
+    margin and recomputes it on `resize`. `viewer.js` is
     a plain-JS asset copied verbatim, so it duplicates exactly one rule from the TypeScript side: the
     whitespace normaliser `.replace(/\s+/g, ' ').trim()`, which must stay byte-identical to
     `collapse()` in `inlineText.ts`. Its VIEWER DRIFT GUARD lives in `scripts/test-headings.js`; the
@@ -185,7 +218,7 @@ touches your real Joplin profile.
     `stripAllowedHere()` combines both guards and is consulted on all three build paths. Pinned by
     `e2e/rich-text-editor.spec.ts`.
   - `manifest.json` — the plugin manifest (id, version, `app_min_version`, screenshots).
-- `e2e/` — the Playwright end-to-end specs (19 spec files), plus `launch.ts`/`helpers.ts` for driving
+- `e2e/` — the Playwright end-to-end specs (20 spec files), plus `launch.ts`/`helpers.ts` for driving
   Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.

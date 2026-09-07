@@ -53,9 +53,32 @@
 		hoverGraceMs: 200,
 		hoverOpenDelayMs: 300,
 		pollMs: 700,
+		outlineMinWidthPx: 140,
+		outlineMaxWidthFraction: 0.9,
+		outlineMinTextPx: 200,
+		outlineRoomGapPx: 6,
 	};
 
-	var settings = { side: 'left', viewerMode: 'overlay', maxDepth: 6, showMinimap: true, hideWhenEmpty: true };
+	// Issue #2 (outline toolbar): the width percent's bounds/default and the toolbar's presets, mirrored
+	// from src/common.ts — keep the literals in sync.
+	var OUTLINE_WIDTH_MIN = 10;
+	var OUTLINE_WIDTH_MAX = 90;
+	var OUTLINE_WIDTH_DEFAULT = 33;
+	var OUTLINE_WIDTH_PRESETS = [25, 33, 50];
+
+	var settings = {
+		side: 'left',
+		viewerMode: 'overlay',
+		maxDepth: 6,
+		showMinimap: true,
+		hideWhenEmpty: true,
+		// Issue #2 — the outline toolbar group. Off by default; with outlineToolbar false every path
+		// below behaves exactly as it did before the toolbar existed (the regression contract).
+		outlineToolbar: false,
+		outlineWidthPercent: OUTLINE_WIDTH_DEFAULT,
+		outlinePinned: false,
+		outlineMakeRoom: true,
+	};
 	var tokens = FALLBACK_TOKENS;
 	var currentSig = null;
 	var buildTimer = null;
@@ -132,12 +155,124 @@
 		};
 	}
 
-	function panelMaxWidthPx() {
+	// A token that a stale/failed round-trip may not carry, with the fallback value.
+	function token(name) {
+		var v = tokens[name];
+		return typeof v === 'number' ? v : FALLBACK_TOKENS[name];
+	}
+
+	function paneWidth() {
 		var el = document.scrollingElement || document.documentElement;
-		var paneWidth = el ? (el.clientWidth || 0) : 0;
+		return el ? (el.clientWidth || 0) : 0;
+	}
+
+	function panelMaxWidthPx() {
+		var pw = paneWidth();
 		var frac = tokens.panelMaxWidthFraction || FALLBACK_TOKENS.panelMaxWidthFraction;
-		var fractionCap = paneWidth > 0 ? Math.floor(paneWidth * frac) : tokens.panelMaxWidth;
-		return Math.max(140, Math.min(tokens.panelMaxWidth, fractionCap));
+		var fractionCap = pw > 0 ? Math.floor(pw * frac) : tokens.panelMaxWidth;
+		return Math.max(token('outlineMinWidthPx'), Math.min(tokens.panelMaxWidth, fractionCap));
+	}
+
+	// ── Issue #2: THE ONE RESOLVER, mirrored from src/common.ts + src/tokens.ts ──
+	//
+	// toolbarOn = showMinimap && outlineToolbar; pinned = toolbarOn && outlinePinned;
+	// makeRoom  = pinned && outlineMakeRoom. The master switch still hides everything, pinned or not.
+	function toolbarOn() {
+		return settings.showMinimap && settings.outlineToolbar;
+	}
+
+	function isPinned() {
+		return toolbarOn() && settings.outlinePinned;
+	}
+
+	function makeRoomOn() {
+		return isPinned() && settings.outlineMakeRoom;
+	}
+
+	// The outline's width in px for the current pane: a percent of it, floored at outlineMinWidthPx and
+	// capped at nine tenths of the pane — except on a pane narrower than the floor, which cannot honour
+	// it and simply gets the whole pane (a very narrow pane must not look surprising).
+	function outlineWidthPx() {
+		var pane = Math.round(paneWidth());
+		var min = token('outlineMinWidthPx');
+		if (!isFinite(pane) || pane <= 0) return min;
+		if (pane < min) return pane;
+		var wanted = Math.round((pane * settings.outlineWidthPercent) / 100);
+		var cap = Math.floor(pane * token('outlineMaxWidthFraction'));
+		return Math.max(min, Math.min(wanted, cap));
+	}
+
+	// The outline ROOM: the outline's width plus the strip's edge inset and a little air, so the text
+	// stops short of the outline's border. 0 = no room — the pane is too narrow to leave a usable text
+	// column beside the outline, so the legacy minimap margin governs and the outline overlays instead.
+	function outlineRoomPx() {
+		var pane = Math.round(paneWidth());
+		if (!isFinite(pane) || pane <= 0) return 0;
+		var room = outlineWidthPx() + token('edgeGapPx') + token('outlineRoomGapPx');
+		if (pane - room < token('outlineMinTextPx')) return 0;
+		return room;
+	}
+
+	// Issue #2: the two heading-depth labels the toolbar shows (mirrored from editorContentScript.ts).
+	function depthLabelShort(maxDepth) {
+		return maxDepth <= 1 ? 'H1' : 'H1–H' + maxDepth;
+	}
+
+	function depthLabelLong(depth) {
+		return depth <= 1 ? 'H1 only' : 'H1–H' + depth;
+	}
+
+	// An inline SVG icon (~14px, currentColor). NOT Font Awesome: Joplin's icon font is chrome and is
+	// not guaranteed inside this iframe, so the toolbar draws its own.
+	function svgIcon(paths) {
+		var NS = 'http://www.w3.org/2000/svg';
+		var svg = document.createElementNS(NS, 'svg');
+		svg.setAttribute('viewBox', '0 0 24 24');
+		svg.setAttribute('width', '14');
+		svg.setAttribute('height', '14');
+		svg.setAttribute('fill', 'none');
+		svg.setAttribute('stroke', 'currentColor');
+		svg.setAttribute('stroke-width', '2');
+		svg.setAttribute('stroke-linecap', 'round');
+		svg.setAttribute('stroke-linejoin', 'round');
+		svg.setAttribute('aria-hidden', 'true');
+		svg.style.flex = '0 0 auto';
+		for (var i = 0; i < paths.length; i++) {
+			var path = document.createElementNS(NS, 'path');
+			path.setAttribute('d', paths[i]);
+			svg.appendChild(path);
+		}
+		return svg;
+	}
+
+	// A toolbar/popover button: a real <button> (tabbable), transparent, 1px panelBorder, 3px radius,
+	// panelFg, pointer cursor, rowHover on hover; `pressed` also colours it with the current-bar colour.
+	function toolbarButton(colors, className, testId, title, pressed) {
+		var button = document.createElement('button');
+		button.type = 'button';
+		button.className = className;
+		button.setAttribute('data-testid', testId);
+		button.title = title;
+		if (pressed !== undefined) button.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+		var b = button.style;
+		b.display = 'inline-flex';
+		b.alignItems = 'center';
+		b.gap = '4px';
+		b.padding = '1px 5px';
+		b.fontFamily = 'inherit';
+		b.fontSize = tokens.panelFontPx + 'px';
+		b.lineHeight = '1.4';
+		b.background = pressed ? colors.rowHover : 'transparent';
+		b.border = '1px solid ' + colors.panelBorder;
+		b.borderRadius = '3px';
+		b.color = pressed ? colors.currentBar : colors.panelFg;
+		b.cursor = 'pointer';
+		b.whiteSpace = 'nowrap';
+		button.addEventListener('mouseenter', function () { button.style.background = colors.rowHover; });
+		button.addEventListener('mouseleave', function () {
+			button.style.background = pressed ? colors.rowHover : 'transparent';
+		});
+		return button;
 	}
 
 	function verticalScrollbarWidth() {
@@ -290,34 +425,83 @@
 		return hostAvailable() && !insideEditorDocument();
 	}
 
+	// Fold a coordinator answer (getSettings OR setSettings — both return the same SettingsResponse)
+	// into the local settings + tokens, defensively, exactly as the editor's coerceSettings does.
+	function applySettingsResult(result) {
+		if (!result || typeof result !== 'object') return;
+		settings.side = result.side === 'right' ? 'right' : 'left';
+		settings.viewerMode = result.viewerMode === 'reserve' ? 'reserve' : 'overlay';
+		var d = Number(result.maxDepth);
+		settings.maxDepth = isFinite(d) ? Math.min(6, Math.max(1, Math.round(d))) : 6;
+		// Z2: default true; only an explicit `false` hides the strip.
+		settings.showMinimap = result.showMinimap !== false;
+		// W3: default true; only an explicit `false` keeps the strip on a heading-less note.
+		settings.hideWhenEmpty = result.hideWhenEmpty !== false;
+		// Issue #2: the two booleans that default to FALSE take only an explicit `true` — the mirror of
+		// the two above — so a malformed answer never switches the toolbar on behind the user's back.
+		settings.outlineToolbar = result.outlineToolbar === true;
+		settings.outlinePinned = result.outlinePinned === true;
+		settings.outlineMakeRoom = result.outlineMakeRoom !== false;
+		var w = Number(result.outlineWidthPercent);
+		settings.outlineWidthPercent = isFinite(w)
+			? Math.min(OUTLINE_WIDTH_MAX, Math.max(OUTLINE_WIDTH_MIN, Math.round(w)))
+			: OUTLINE_WIDTH_DEFAULT;
+		if (result.tokens) tokens = result.tokens;
+	}
+
 	function fetchSettings() {
 		if (!hostAvailable()) {
 			return Promise.resolve();
 		}
 		return webviewApi.postMessage(VIEWER_CONTENT_SCRIPT_ID, { type: 'getSettings' })
-			.then(function (result) {
-				if (result && typeof result === 'object') {
-					settings.side = result.side === 'right' ? 'right' : 'left';
-					settings.viewerMode = result.viewerMode === 'reserve' ? 'reserve' : 'overlay';
-					var d = Number(result.maxDepth);
-					settings.maxDepth = isFinite(d) ? Math.min(6, Math.max(1, Math.round(d))) : 6;
-					// Z2: default true; only an explicit `false` hides the strip.
-					settings.showMinimap = result.showMinimap !== false;
-					// W3: default true; only an explicit `false` keeps the strip on a heading-less note.
-					settings.hideWhenEmpty = result.hideWhenEmpty !== false;
-					if (result.tokens) tokens = result.tokens;
-				}
-			})
+			.then(function (result) { applySettingsResult(result); })
 			.catch(function () { /* keep current settings */ });
 	}
 
-	function settingsSignature() {
-		return JSON.stringify({ s: settings.side, m: settings.viewerMode, d: settings.maxDepth, v: settings.showMinimap, e: settings.hideWhenEmpty, t: tokens });
+	// Issue #2: a toolbar control writing its value back through the coordinator, which allowlists and
+	// clamps it, stores it (firing the onChange push to the editor) and answers with the fresh settings.
+	// Applying that answer and rebuilding at once makes the click feel instant, instead of waiting up to
+	// a poll interval for our own change to come back around.
+	function sendSettings(values) {
+		if (!hostAvailable()) return;
+		webviewApi.postMessage(VIEWER_CONTENT_SCRIPT_ID, { type: 'setSettings', values: values })
+			.then(function (result) {
+				if (!result || typeof result !== 'object') return;
+				applySettingsResult(result);
+				rebuild();
+			})
+			.catch(function () { /* the poll will pick the change up */ });
 	}
 
+	function settingsSignature() {
+		return JSON.stringify({
+			s: settings.side,
+			m: settings.viewerMode,
+			d: settings.maxDepth,
+			v: settings.showMinimap,
+			e: settings.hideWhenEmpty,
+			b: settings.outlineToolbar,
+			w: settings.outlineWidthPercent,
+			p: settings.outlinePinned,
+			r: settings.outlineMakeRoom,
+			t: tokens,
+		});
+	}
+
+	// The viewer's body margin: the OUTLINE ROOM when one is being made, else the legacy thin minimap
+	// margin, else nothing. The room supersedes the thin margin rather than adding to it — the pinned
+	// outline covers the bars anyway, so reserving for both would double-count. outlineRoomPx() already
+	// returns 0 on a pane too narrow to leave a usable text column, and then the outline overlays, which
+	// is exactly what it does on hover today.
 	function applyReserveMargin() {
 		document.body.style.marginLeft = '';
 		document.body.style.marginRight = '';
+		var room = makeRoomOn() ? outlineRoomPx() : 0;
+		if (room > 0) {
+			if (settings.side === 'right') document.body.style.marginRight = room + 'px';
+			else document.body.style.marginLeft = room + 'px';
+			return;
+		}
 		if (settings.viewerMode !== 'reserve') return;
 		var pad = (stripTotalWidth() + tokens.edgeGapPx) + 'px';
 		if (settings.side === 'right') document.body.style.marginRight = pad;
@@ -352,6 +536,8 @@
 	function teardown() {
 		if (!strip) return;
 		if (strip.scrollHandler) window.removeEventListener('scroll', strip.scrollHandler, true);
+		// Issue #2: the outline's width is a percent of the pane, so it listens for pane resizes.
+		if (strip.resize) window.removeEventListener('resize', strip.resize);
 		if (strip.pointermove) document.removeEventListener('mousemove', strip.pointermove);
 		if (strip.docleave) document.removeEventListener('mouseleave', strip.docleave);
 		if (strip.pointerout) document.removeEventListener('mouseout', strip.pointerout);
@@ -383,11 +569,16 @@
 		var headings = headingElements();
 		var count = headings.length;
 		var side = settings.side;
+		// Issue #2: resolved once per build — the strip is rebuilt whenever any of these changes, so the
+		// handlers below can close over the value instead of re-resolving it.
+		var pinned = isPinned();
 
 		// Z2/W3: not shown — leave nothing mounted (all listeners torn down by teardown) and drop any
 		// reserve margin so the note text reclaims the space. Hidden when the master toggle is off, or
-		// (W3) when the note has no headings and hideWhenEmpty is on.
-		if (!settings.showMinimap || (settings.hideWhenEmpty && count === 0)) {
+		// (W3) when the note has no headings and hideWhenEmpty is on — but a PINNED outline stays even on
+		// a heading-less note (it shows its toolbar and a "No headings" placeholder), so it can always be
+		// unpinned in place. showMinimap=false still wins over everything.
+		if (!settings.showMinimap || (!pinned && settings.hideWhenEmpty && count === 0)) {
 			document.body.style.marginLeft = '';
 			document.body.style.marginRight = '';
 			return;
@@ -398,6 +589,9 @@
 		el.className = 'ridgeline-strip ridgeline-viewer-strip';
 		el.setAttribute('data-side', side);
 		el.setAttribute('data-mode', settings.viewerMode);
+		// Issue #2: the pinned state and the resolved outline width, published for the other half of the
+		// feature to read (and for the E2E to assert on) in every state, pinned or not.
+		el.setAttribute('data-pinned', pinned ? 'true' : 'false');
 		var s = el.style;
 		s.position = 'fixed';
 		// R1: anchor the stack to the TOP of the pane (small offset), not vertically centred.
@@ -446,19 +640,20 @@
 		var panel = document.createElement('div');
 		panel.className = 'ridgeline-panel';
 		var p = panel.style;
-		p.display = 'none';
+		// Issue #2: PINNED, the outline is simply always open, docked at the full height of the pane (the
+		// container already spans it) with the rows scrolling inside.
+		p.display = pinned ? 'block' : 'none';
 		p.position = 'absolute';
 		p.top = '0';
 		p.maxHeight = '100%';
+		if (pinned) p.height = '100%';
 		p.overflowY = 'auto';
 		p.overflowX = 'hidden';
 		p.boxSizing = 'border-box';
 		p.padding = tokens.panelPaddingPx + 'px';
-		// P3: size to the longest row up to a (widened) cap; beyond the cap a row stays a single line and
-		// is trimmed with an ellipsis, never wrapped.
-		p.width = 'max-content';
-		p.minWidth = '140px';
-		p.maxWidth = panelMaxWidthPx() + 'px';
+		// Issue #2: the toolbar is a sticky, full-bleed first row, so the panel gives up its top padding
+		// while one is shown — otherwise the row would stick 8px below the panel's own top edge.
+		if (toolbarOn()) p.paddingTop = '0';
 		p.background = colors.panelBg;
 		p.color = colors.panelFg;
 		p.border = '1px solid ' + colors.panelBorder;
@@ -475,6 +670,268 @@
 		if (side === 'right') { p.right = '0'; p.left = ''; }
 		else { p.left = '0'; p.right = ''; }
 		el.appendChild(panel);
+
+		// Issue #2 — size the outline and reserve its room, for the pane AS IT IS NOW. Called at build
+		// time and again on every window resize, because the width is a PERCENT of a pane that moves.
+		//
+		// Three sizings, and only the middle one is new:
+		//  - toolbar OFF        → exactly today's content-fit sizing, untouched (the regression contract).
+		//  - toolbar ON, hover  → still content-fit ("a hovered outline that does not need the width does
+		//                         not use it"): the percent only REPLACES the old cap as the max-width.
+		//  - PINNED             → an exactly-outlineWidthPx docked panel; the room made for it is that wide.
+		// P3 holds in all three: a row too long for the width stays a single line and is trimmed with an
+		// ellipsis, never wrapped.
+		function applyOutlineGeometry() {
+			var width = outlineWidthPx();
+			var min = token('outlineMinWidthPx');
+			el.setAttribute('data-outline-width', String(width));
+			if (!toolbarOn()) {
+				p.width = 'max-content';
+				p.minWidth = min + 'px';
+				p.maxWidth = panelMaxWidthPx() + 'px';
+			} else if (pinned) {
+				p.width = width + 'px';
+				p.minWidth = width + 'px';
+				p.maxWidth = width + 'px';
+			} else {
+				// A pane narrower than the minimum cannot honour it (min-width would beat max-width and
+				// overflow the pane), so there the floor drops to the width itself.
+				p.width = 'max-content';
+				p.minWidth = Math.min(width, min) + 'px';
+				p.maxWidth = width + 'px';
+			}
+			applyReserveMargin();
+		}
+		applyOutlineGeometry();
+
+		// ── Issue #2: the outline toolbar — the outline's FIRST row ────────
+		//
+		// Identical class names and behaviour to the editor's (see editorContentScript.ts); only the
+		// data-testid prefix differs. Rebuilt with the panel on every settings change, so it always
+		// reflects the CURRENT settings (percent, depth, pressed state) with no second update path.
+		var popover = null;
+		var popoverFor = null;
+		var widthInput = null;
+		var toolbarEl = null;
+
+		// The hover outline must not collapse out from under an open popover or a field being typed into.
+		function holdOpen() {
+			return popover !== null || (widthInput !== null && document.activeElement === widthInput);
+		}
+
+		// Returns whether a popover was actually closed, so Escape can stop at the popover.
+		function closePopover() {
+			if (!popover) { popoverFor = null; widthInput = null; return false; }
+			var pop = popover;
+			popover = null;
+			popoverFor = null;
+			widthInput = null;
+			if (pop.parentNode) pop.parentNode.removeChild(pop);
+			return true;
+		}
+
+		// Every toolbar/popover click is swallowed: the toolbar sits INSIDE the panel, whose rows and bars
+		// jump on click, so a control must never let its click reach them.
+		function onToolbarClick(element, handler) {
+			element.addEventListener('click', function (event) {
+				event.preventDefault();
+				event.stopPropagation();
+				handler();
+			});
+		}
+
+		// A popover lives INSIDE the panel, directly under the toolbar, so the panel's own bounding rect
+		// (what the hover hit-test uses) still contains the pointer while it is being used.
+		function popoverShell(kind) {
+			var pop = document.createElement('div');
+			pop.className = 'ridgeline-tb-popover';
+			pop.setAttribute('data-for', kind);
+			pop.setAttribute('data-testid', 'ridgeline-viewer-tb-popover-' + kind);
+			var ps = pop.style;
+			ps.display = 'flex';
+			ps.flexWrap = 'wrap';
+			ps.alignItems = 'center';
+			ps.gap = '4px';
+			ps.padding = '4px 6px';
+			ps.margin = '0 ' + -tokens.panelPaddingPx + 'px 4px ' + -tokens.panelPaddingPx + 'px';
+			ps.background = colors.panelBg;
+			ps.borderBottom = '1px solid ' + colors.panelBorder;
+			ps.cursor = 'default';
+			return pop;
+		}
+
+		function buildWidthPopover() {
+			var pop = popoverShell('width');
+			OUTLINE_WIDTH_PRESETS.forEach(function (preset) {
+				var button = toolbarButton(
+					colors,
+					'ridgeline-tb-preset',
+					'ridgeline-viewer-tb-preset-' + preset,
+					preset + '% of the pane',
+					preset === settings.outlineWidthPercent
+				);
+				button.setAttribute('data-preset', String(preset));
+				button.textContent = preset + '%';
+				onToolbarClick(button, function () {
+					closePopover();
+					if (preset !== settings.outlineWidthPercent) sendSettings({ outlineWidthPercent: preset });
+				});
+				pop.appendChild(button);
+			});
+
+			// The free-form field: applies on Enter or on blur, clamped to 10–90; anything unparseable
+			// snaps back to the current value rather than writing a nonsense width.
+			var input = document.createElement('input');
+			input.className = 'ridgeline-tb-width-input';
+			input.setAttribute('data-testid', 'ridgeline-viewer-tb-width-input');
+			input.type = 'number';
+			input.min = String(OUTLINE_WIDTH_MIN);
+			input.max = String(OUTLINE_WIDTH_MAX);
+			input.step = '1';
+			input.value = String(settings.outlineWidthPercent);
+			input.title = 'Any width from ' + OUTLINE_WIDTH_MIN + ' to ' + OUTLINE_WIDTH_MAX + '%';
+			var istyle = input.style;
+			istyle.width = '52px';
+			istyle.fontFamily = 'inherit';
+			istyle.fontSize = tokens.panelFontPx + 'px';
+			istyle.padding = '1px 4px';
+			istyle.background = 'transparent';
+			istyle.color = colors.panelFg;
+			istyle.border = '1px solid ' + colors.panelBorder;
+			istyle.borderRadius = '3px';
+			// The toolbar row is cursor:default and the panel is cursor:pointer; a text field must read as one.
+			istyle.cursor = 'text';
+			var applyInput = function () {
+				// A blur fired because the popover was removed has nothing to apply.
+				if (!input.isConnected) return;
+				var raw = String(input.value).trim();
+				var parsed = Number(raw);
+				if (raw === '' || !isFinite(parsed)) { input.value = String(settings.outlineWidthPercent); return; }
+				var next = Math.min(OUTLINE_WIDTH_MAX, Math.max(OUTLINE_WIDTH_MIN, Math.round(parsed)));
+				input.value = String(next);
+				closePopover();
+				if (next !== settings.outlineWidthPercent) sendSettings({ outlineWidthPercent: next });
+			};
+			input.addEventListener('keydown', function (event) {
+				// Kept away from the window-level Escape handler: inside the field, Escape dismisses the
+				// popover and leaves the outline exactly as it was.
+				event.stopPropagation();
+				if (event.key === 'Enter') { event.preventDefault(); applyInput(); }
+				else if (event.key === 'Escape') { event.preventDefault(); closePopover(); }
+			});
+			input.addEventListener('blur', function () { applyInput(); });
+			input.addEventListener('click', function (event) { event.stopPropagation(); });
+			pop.appendChild(input);
+			widthInput = input;
+
+			var percent = document.createElement('span');
+			percent.textContent = '%';
+			percent.style.fontSize = tokens.panelFontPx + 'px';
+			percent.style.color = colors.panelFg;
+			pop.appendChild(percent);
+			return pop;
+		}
+
+		function buildHeadingsPopover() {
+			var pop = popoverShell('headings');
+			for (var depth = 1; depth <= 6; depth++) {
+				(function (d) {
+					var button = toolbarButton(
+						colors,
+						'ridgeline-tb-depth',
+						'ridgeline-viewer-tb-depth-' + d,
+						'Show headings down to H' + d,
+						d === settings.maxDepth
+					);
+					button.setAttribute('data-depth', String(d));
+					button.textContent = depthLabelLong(d);
+					onToolbarClick(button, function () {
+						closePopover();
+						if (d !== settings.maxDepth) sendSettings({ maxDepth: d });
+					});
+					pop.appendChild(button);
+				})(depth);
+			}
+			return pop;
+		}
+
+		// Only one popover is ever open; clicking the button that owns the open one closes it again.
+		function togglePopover(kind) {
+			var wasOpen = popoverFor === kind;
+			closePopover();
+			if (wasOpen) return;
+			var pop = kind === 'width' ? buildWidthPopover() : buildHeadingsPopover();
+			popover = pop;
+			popoverFor = kind;
+			if (toolbarEl && toolbarEl.nextSibling) panel.insertBefore(pop, toolbarEl.nextSibling);
+			else panel.appendChild(pop);
+		}
+
+		function buildToolbar() {
+			var bar = document.createElement('div');
+			bar.className = 'ridgeline-toolbar';
+			bar.setAttribute('data-testid', 'ridgeline-viewer-toolbar');
+			var ts = bar.style;
+			// Sticky, so scrolling a long outline never scrolls the Pin button out of reach. Full-bleed via
+			// negative side margins (the panel keeps its side padding for the rows).
+			ts.position = 'sticky';
+			ts.top = '0';
+			ts.zIndex = '2';
+			ts.display = 'flex';
+			ts.alignItems = 'center';
+			ts.gap = '6px';
+			// Wrap rather than clip: a narrow outline would otherwise push the Pin button out past the
+			// panel's overflow:hidden edge, where it could not be clicked.
+			ts.flexWrap = 'wrap';
+			ts.padding = '4px 6px';
+			ts.margin = '0 ' + -tokens.panelPaddingPx + 'px 4px ' + -tokens.panelPaddingPx + 'px';
+			ts.background = colors.panelBg;
+			ts.borderBottom = '1px solid ' + colors.panelBorder;
+			ts.fontSize = tokens.panelFontPx + 'px';
+			// The rows' pointer cursor must not leak into the toolbar's background: only the buttons click.
+			ts.cursor = 'default';
+
+			// WIDTH — a horizontal double arrow + the current percent.
+			var width = toolbarButton(colors, 'ridgeline-tb-width', 'ridgeline-viewer-tb-width', 'Outline width');
+			width.appendChild(svgIcon(['M18 8l4 4-4 4', 'M6 8l-4 4 4 4', 'M2 12h20']));
+			width.appendChild(document.createTextNode(settings.outlineWidthPercent + '%'));
+			onToolbarClick(width, function () { togglePopover('width'); });
+			bar.appendChild(width);
+
+			// HEADINGS — an H + the current depth range.
+			var headingsButton = toolbarButton(colors, 'ridgeline-tb-headings', 'ridgeline-viewer-tb-headings', 'Headings shown');
+			headingsButton.appendChild(svgIcon(['M6 4v16', 'M18 4v16', 'M6 12h12']));
+			headingsButton.appendChild(document.createTextNode(depthLabelShort(settings.maxDepth)));
+			onToolbarClick(headingsButton, function () { togglePopover('headings'); });
+			bar.appendChild(headingsButton);
+
+			// PIN — icon only; its pressed state is the pin itself.
+			var pin = toolbarButton(
+				colors,
+				'ridgeline-tb-pin',
+				'ridgeline-viewer-tb-pin',
+				pinned ? 'Unpin the outline' : 'Pin the outline open (Ctrl+Alt+P)',
+				pinned
+			);
+			pin.appendChild(svgIcon(['M9 2h6l-1 5 3 3v2H7v-2l3-3-1-5z', 'M12 12v10']));
+			onToolbarClick(pin, function () { sendSettings({ outlinePinned: !pinned }); });
+			bar.appendChild(pin);
+
+			return bar;
+		}
+
+		if (toolbarOn()) {
+			toolbarEl = buildToolbar();
+			panel.appendChild(toolbarEl);
+		}
+
+		// A click anywhere else inside the outline (a row, the panel background) closes an open popover.
+		// CAPTURE phase, because the rows stopPropagation on click.
+		panel.addEventListener('click', function (event) {
+			var target = event.target;
+			if (target && target.closest && target.closest('.ridgeline-toolbar, .ridgeline-tb-popover')) return;
+			closePopover();
+		}, true);
 
 		var bars = [];
 		var rows = [];
@@ -549,6 +1006,26 @@
 			rows.push(row);
 		});
 
+		// Issue #2: a PINNED outline stays on a note with no headings (W3 would otherwise unmount the
+		// whole strip), so it needs something to say — and the toolbar above it keeps the Pin button
+		// reachable, so the user can always unpin in place.
+		if (count === 0 && toolbarOn()) {
+			var empty = document.createElement('div');
+			empty.className = 'ridgeline-panel-empty';
+			empty.setAttribute('data-testid', 'ridgeline-viewer-empty');
+			empty.textContent = 'No headings';
+			var es = empty.style;
+			es.fontSize = tokens.panelFontPx + 'px';
+			es.lineHeight = '1.4';
+			es.padding = tokens.panelRowPaddingPx + 'px 6px';
+			es.paddingLeft = tokens.panelPaddingPx + 'px';
+			es.color = colors.panelFg;
+			es.opacity = '0.7';
+			es.whiteSpace = 'nowrap';
+			es.cursor = 'default';
+			panel.appendChild(empty);
+		}
+
 		var activeIndex = -1;
 
 		function updateActive() {
@@ -595,7 +1072,9 @@
 		};
 		window.addEventListener('scroll', scrollHandler, true);
 
-		var expanded = false;
+		// Issue #2: pinned, the outline starts open and stays open — the hover-intent timer, the collapse
+		// grace, departZone, blur/visibility and Escape are all held off below.
+		var expanded = pinned;
 		var collapseTimer = null;
 		var openTimer = null;
 		function cancelOpen() {
@@ -613,12 +1092,16 @@
 			if (activeIndex >= 0 && rows[activeIndex]) rows[activeIndex].scrollIntoView({ block: 'nearest' });
 		}
 		function collapse() {
+			// A pinned outline never collapses, and neither does one whose toolbar popover is open or whose
+			// width field is being typed into (the collapse grace is held until it is dismissed).
+			if (pinned || holdOpen()) return;
 			cancelOpen();
 			expanded = false;
 			panel.style.display = 'none';
 			el.setAttribute('data-expanded', 'false');
 		}
 		function scheduleCollapse() {
+			if (pinned || holdOpen()) return;
 			if (collapseTimer) clearTimeout(collapseTimer);
 			collapseTimer = setTimeout(function () { collapseTimer = null; collapse(); }, tokens.hoverGraceMs);
 			if (strip) strip.collapseTimer = collapseTimer;
@@ -636,6 +1119,8 @@
 		// cancels it, so dragging a selection across the minimap neither opens the panel nor blocks the
 		// selection. Once open, staying over the bars/panel keeps it open (cancels the collapse grace).
 		var pointermove = function (event) {
+			// Issue #2: a PINNED outline is not driven by hover at all — nothing to arm, nothing to collapse.
+			if (pinned) { cancelCollapse(); return; }
 			if (count === 0) return;
 			var overBars = pointInRect(event.clientX, event.clientY, barsWrap.getBoundingClientRect());
 			var overPanel = expanded && pointInRect(event.clientX, event.clientY, panel.getBoundingClientRect());
@@ -663,7 +1148,14 @@
 		};
 		var winblur = function () { departZone(); };
 		var visibility = function () { if (document.visibilityState !== 'visible') { cancelOpen(); if (expanded) collapse(); } };
-		var keydown = function (event) { if (event.key === 'Escape' && expanded) collapse(); };
+		var keydown = function (event) {
+			if (event.key !== 'Escape') return;
+			// Issue #2: Escape closes an open toolbar popover FIRST and stops there; a pinned outline is
+			// never closed by it.
+			if (closePopover()) return;
+			if (pinned) return;
+			if (expanded) collapse();
+		};
 		document.addEventListener('mousemove', pointermove, { passive: true });
 		document.addEventListener('mouseleave', docleave);
 		document.addEventListener('mouseout', pointerout, { passive: true });
@@ -671,11 +1163,23 @@
 		document.addEventListener('visibilitychange', visibility);
 		window.addEventListener('keydown', keydown);
 
+		// Issue #2: the outline's width — and the room reserved for it — are a PERCENT of the pane, so
+		// both are recomputed whenever the pane resizes (the editor half does the same from its own
+		// resize/ResizeObserver path).
+		var resizeHandler = function () { applyOutlineGeometry(); };
+		window.addEventListener('resize', resizeHandler);
+
 		document.body.appendChild(el);
 		applyReserveMargin();
 		updateActive();
+		// Issue #2: pinned, the panel is open from the moment it is built (display was set above), and the
+		// current row is brought into view exactly as an expand() would.
+		if (pinned) {
+			el.setAttribute('data-expanded', 'true');
+			if (activeIndex >= 0 && rows[activeIndex]) rows[activeIndex].scrollIntoView({ block: 'nearest' });
+		}
 
-		strip = { el: el, scrollHandler: scrollHandler, pointermove: pointermove, docleave: docleave, pointerout: pointerout, winblur: winblur, visibility: visibility, keydown: keydown, collapseTimer: collapseTimer, openTimer: openTimer };
+		strip = { el: el, scrollHandler: scrollHandler, resize: resizeHandler, pointermove: pointermove, docleave: docleave, pointerout: pointerout, winblur: winblur, visibility: visibility, keydown: keydown, collapseTimer: collapseTimer, openTimer: openTimer };
 	}
 
 	function jump(anchor) {

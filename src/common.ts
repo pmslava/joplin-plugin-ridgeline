@@ -33,6 +33,12 @@ export const TOGGLE_MINIMAP_COMMAND = 'ridgeline.toggleMinimap';
 // mounts/unmounts the strip.
 export const TOGGLE_HIDE_WHEN_EMPTY_COMMAND = 'ridgeline.toggleHideWhenEmpty';
 
+// Outline toolbar: plugin command (Tools → Ridgeline submenu + accelerator Ctrl+Alt+P) that flips the
+// "Pin the outline open" setting. Pinning while the toolbar is OFF also turns the toolbar on — a pinned
+// outline with no toolbar row would be invisible AND impossible to unpin with the mouse. Unpinning
+// leaves the toolbar exactly as it is (see index.ts).
+export const TOGGLE_PIN_COMMAND = 'ridgeline.togglePin';
+
 // Setting keys (registered under the plugin namespace). Stored in File storage so they can be seeded
 // in a profile's settings.json and survive restarts.
 export const SETTING_SIDE = 'side';
@@ -59,6 +65,35 @@ export const SETTING_HOVER_OPEN_DELAY = 'hoverOpenDelayMs';
 export const HOVER_OPEN_DELAY_MIN = 100;
 export const HOVER_OPEN_DELAY_MAX = 1000;
 
+// ── OUTLINE TOOLBAR (issue #2) ───────────────────────────────────────────
+//
+// Vocabulary, used consistently in code, labels and docs. Everything the USER reads (setting labels,
+// descriptions, README, tooltips) says "minimap" for the compact bars, never "strip"; the code keeps
+// its older `strip` identifiers, CSS classes and data-testids, which must not be renamed:
+//   minimap (code: strip) = the compact stack of thin bars at the pane edge.
+//   outline               = the expanded table-of-contents panel (.ridgeline-panel) over it.
+//   minimap margin        = the EXISTING thin margin (editorMode/viewerMode = 'reserve') that keeps
+//                           the text clear of the BARS only.
+//   outline room          = the NEW wide margin that keeps the text clear of a PINNED outline.
+//
+// The toolbar is the outline's first row (Width / Headings / Pin). It is OFF by default, and the three
+// settings below it are meaningless while it is off — with outlineToolbar false every code path on both
+// surfaces behaves exactly as it did before this feature existed (the regression contract).
+export const SETTING_OUTLINE_TOOLBAR = 'outlineToolbar';
+// Outline width as a share of the pane, in percent. Shapes the hover outline AND the pinned one.
+export const SETTING_OUTLINE_WIDTH_PERCENT = 'outlineWidthPercent';
+// Keep the outline open at full pane height until unpinned (persisted, so a pin survives a restart).
+export const SETTING_OUTLINE_PINNED = 'outlinePinned';
+// While pinned, push the note text aside by the outline's width instead of overlaying it.
+export const SETTING_OUTLINE_MAKE_ROOM = 'outlineMakeRoom';
+
+// The width percent's bounds/default and the toolbar's three presets. Mirrored in viewer.js (which
+// cannot import this module) — keep the literal values in sync.
+export const OUTLINE_WIDTH_MIN = 10;
+export const OUTLINE_WIDTH_MAX = 90;
+export const OUTLINE_WIDTH_DEFAULT = 33;
+export const OUTLINE_WIDTH_PRESETS = [25, 33, 50];
+
 export type Side = 'left' | 'right';
 export type PaneMode = 'overlay' | 'reserve';
 
@@ -73,6 +108,15 @@ export interface RidgelineSettings {
 	// W3: when true (default), a note with 0 headings hides the strip AND drops the reserve margin in
 	// both surfaces / every window. false = the empty strip + margin are kept (pre-W3 behaviour).
 	hideWhenEmpty: boolean;
+	// Issue #2: show the outline's first row (Width / Headings / Pin). OFF by default; the three fields
+	// below do nothing while it is off.
+	outlineToolbar: boolean;
+	// Outline width as a percent of the pane (OUTLINE_WIDTH_MIN..MAX).
+	outlineWidthPercent: number;
+	// Keep the outline open at the full pane height until unpinned.
+	outlinePinned: boolean;
+	// While pinned, reserve the outline room (the wide margin) so the outline covers no text.
+	outlineMakeRoom: boolean;
 }
 
 export const DEFAULT_SETTINGS: RidgelineSettings = {
@@ -82,7 +126,31 @@ export const DEFAULT_SETTINGS: RidgelineSettings = {
 	maxDepth: 6,
 	showMinimap: true,
 	hideWhenEmpty: true,
+	outlineToolbar: false,
+	outlineWidthPercent: OUTLINE_WIDTH_DEFAULT,
+	outlinePinned: false,
+	outlineMakeRoom: true,
 };
+
+// ── THE ONE RESOLVER (both surfaces must agree) ──────────────────────────
+//
+// Mirrored verbatim in viewer.js (plain JS, no imports). These three predicates fold the master
+// showMinimap switch into the toolbar's own settings, so there is exactly one place where "is the
+// toolbar on / is it pinned / is room being made" is decided:
+//   toolbarOn = showMinimap && outlineToolbar
+//   pinned    = toolbarOn   && outlinePinned
+//   makeRoom  = pinned      && outlineMakeRoom
+export function outlineToolbarOn(settings: RidgelineSettings): boolean {
+	return settings.showMinimap && settings.outlineToolbar;
+}
+
+export function outlinePinnedOn(settings: RidgelineSettings): boolean {
+	return outlineToolbarOn(settings) && settings.outlinePinned;
+}
+
+export function outlineMakeRoomOn(settings: RidgelineSettings): boolean {
+	return outlinePinnedOn(settings) && settings.outlineMakeRoom;
+}
 
 // The coordinator's answer to a getSettings request: the resolved settings plus the design tokens.
 // The viewer strip (plain-JS iframe asset that cannot import tokens.ts) reads its tokens from here.
@@ -106,4 +174,13 @@ export interface JumpMessage {
 	line: number | null;
 }
 
-export type ContentScriptMessage = GetSettingsMessage | JumpMessage;
+// A settings change made FROM a surface (the outline toolbar's Width / Headings / Pin controls). The
+// coordinator applies an ALLOWLIST of exactly these three keys — a content script can never write any
+// other setting — coerces each, and answers with a fresh SettingsResponse so the clicking surface can
+// apply it immediately instead of waiting for the onChange push / the 700ms poll.
+export interface SetSettingsMessage {
+	type: 'setSettings';
+	values: Partial<{ outlinePinned: boolean; outlineWidthPercent: number; maxDepth: number }>;
+}
+
+export type ContentScriptMessage = GetSettingsMessage | JumpMessage | SetSettingsMessage;

@@ -12,22 +12,31 @@ import {
 	EDITOR_SCROLL_COMMAND,
 	HOVER_OPEN_DELAY_MAX,
 	HOVER_OPEN_DELAY_MIN,
+	OUTLINE_WIDTH_DEFAULT,
+	OUTLINE_WIDTH_MAX,
+	OUTLINE_WIDTH_MIN,
 	PLUGIN_ID,
 	SETTING_EDITOR_MODE,
 	SETTING_HIDE_WHEN_EMPTY,
 	SETTING_HOVER_OPEN_DELAY,
 	SETTING_MAX_DEPTH,
+	SETTING_OUTLINE_MAKE_ROOM,
+	SETTING_OUTLINE_PINNED,
+	SETTING_OUTLINE_TOOLBAR,
+	SETTING_OUTLINE_WIDTH_PERCENT,
 	SETTING_SHOW_MINIMAP,
 	SETTING_SHOW_TOOLBAR_BUTTON,
 	SETTING_SIDE,
 	SETTING_VIEWER_MODE,
 	TOGGLE_HIDE_WHEN_EMPTY_COMMAND,
 	TOGGLE_MINIMAP_COMMAND,
+	TOGGLE_PIN_COMMAND,
 	TOGGLE_SIDE_COMMAND,
 	VIEWER_CONTENT_SCRIPT_ID,
 	type ContentScriptMessage,
 	type PaneMode,
 	type RidgelineSettings,
+	type SetSettingsMessage,
 	type SettingsResponse,
 	type Side,
 } from './common';
@@ -56,15 +65,25 @@ async function registerSettings(): Promise<void> {
 			// File storage so the value persists AND can be seeded via a profile settings.json.
 			storage: SettingStorage.File,
 		},
+		// The two MINIMAP margins. Relabelled (keys, values and option values unchanged) so they can no
+		// longer be confused with the pinned outline's own, much wider margin — "Make room for the
+		// pinned outline" below. This one only ever clears the compact bars. User-facing wording says
+		// "minimap" throughout; the code keeps its older `strip` identifiers.
 		[SETTING_EDITOR_MODE]: {
 			value: 'overlay',
 			type: SettingItemType.String,
 			isEnum: true,
 			public: true,
 			section: SETTINGS_SECTION,
-			label: 'Editor strip mode',
-			description: 'overlay draws over the text; reserve adds a margin so text is not covered.',
-			options: { overlay: 'Overlay', reserve: 'Reserve margin' },
+			label: 'Editor minimap margin',
+			description:
+				'The thin margin for the minimap\'s bars in the Markdown editor. It applies to the bars ' +
+				'only, never to the outline; a pinned outline gets its own, wider margin from "Make room ' +
+				'for the pinned outline" below.',
+			options: {
+				overlay: 'None — the bars overlay the text',
+				reserve: 'Thin margin — keep the text clear of the bars',
+			},
 			storage: SettingStorage.File,
 		},
 		[SETTING_VIEWER_MODE]: {
@@ -73,9 +92,15 @@ async function registerSettings(): Promise<void> {
 			isEnum: true,
 			public: true,
 			section: SETTINGS_SECTION,
-			label: 'Viewer strip mode',
-			description: 'overlay draws over the rendered note; reserve adds a margin so text is not covered.',
-			options: { overlay: 'Overlay', reserve: 'Reserve margin' },
+			label: 'Viewer minimap margin',
+			description:
+				'The thin margin for the minimap\'s bars in the rendered viewer. It applies to the bars ' +
+				'only, never to the outline; a pinned outline gets its own, wider margin from "Make room ' +
+				'for the pinned outline" below.',
+			options: {
+				overlay: 'None — the bars overlay the text',
+				reserve: 'Thin margin — keep the text clear of the bars',
+			},
 			storage: SettingStorage.File,
 		},
 		[SETTING_MAX_DEPTH]: {
@@ -144,6 +169,71 @@ async function registerSettings(): Promise<void> {
 				'mouse trip across the strip never pops it open; lower = opens sooner. 100–1000ms.',
 			storage: SettingStorage.File,
 		},
+		// ── OUTLINE TOOLBAR (issue #2) ───────────────────────────────────
+		//
+		// Four settings, registered LAST so they read as one group under the older ones. Joplin's
+		// settings API cannot gray a setting out while another is off, so each description says plainly
+		// what it depends on — that sentence is the only "disabled" state the user gets.
+		[SETTING_OUTLINE_TOOLBAR]: {
+			value: false,
+			type: SettingItemType.Bool,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Show the outline toolbar',
+			description:
+				'Adds a row of controls to the top of the outline (the table of contents that opens over ' +
+				'the minimap): Width, Headings and Pin. Off by default, and then the outline behaves ' +
+				'exactly as before. The three settings below depend on it and do nothing while it is off. ' +
+				'Applies live.',
+			storage: SettingStorage.File,
+		},
+		[SETTING_OUTLINE_WIDTH_PERCENT]: {
+			value: OUTLINE_WIDTH_DEFAULT,
+			type: SettingItemType.Int,
+			minimum: OUTLINE_WIDTH_MIN,
+			maximum: OUTLINE_WIDTH_MAX,
+			step: 1,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Outline width (% of the pane)',
+			description:
+				'The outline\'s width as a share of the editor or viewer pane. A pinned outline is exactly ' +
+				'this wide; the outline that opens on hover stays as narrow as its headings allow and uses ' +
+				'this only as its limit, as it does today. The toolbar\'s Width control offers 25, 33 and ' +
+				'50 and a field for any value from 10 to 90; this setting is the same value. The outline ' +
+				'is never narrower than 140 px and never wider than nine tenths of the pane. Needs the ' +
+				'outline toolbar. Applies live.',
+			storage: SettingStorage.File,
+		},
+		[SETTING_OUTLINE_PINNED]: {
+			value: false,
+			type: SettingItemType.Bool,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Pin the outline open',
+			description:
+				'Keep the outline open at the full height of the pane instead of opening it on hover — in ' +
+				'the editor and the viewer, in every window — until it is unpinned. The Pin button in the ' +
+				'outline toolbar and Ctrl+Alt+P flip this same setting, so a pin survives a restart. Needs ' +
+				'the outline toolbar. Applies live.',
+			storage: SettingStorage.File,
+		},
+		[SETTING_OUTLINE_MAKE_ROOM]: {
+			value: true,
+			type: SettingItemType.Bool,
+			public: true,
+			section: SETTINGS_SECTION,
+			label: 'Make room for the pinned outline',
+			description:
+				'While the outline is pinned, push the note text aside by the outline\'s width so the ' +
+				'outline never covers a word. The outline keeps its border, so where the note ends and the ' +
+				'outline begins stays visible. This is the outline\'s own, wide margin — separate from the ' +
+				'thin minimap margins above, which only clear the bars. Off: the pinned outline overlays ' +
+				'the text, as it does on hover. On a pane too narrow to leave at least 200 px of text ' +
+				'beside the outline, no room is made and the outline overlays instead. Needs the outline ' +
+				'toolbar and a pinned outline. Applies live.',
+			storage: SettingStorage.File,
+		},
 	});
 }
 
@@ -155,6 +245,10 @@ async function readSettings(): Promise<RidgelineSettings> {
 		SETTING_MAX_DEPTH,
 		SETTING_SHOW_MINIMAP,
 		SETTING_HIDE_WHEN_EMPTY,
+		SETTING_OUTLINE_TOOLBAR,
+		SETTING_OUTLINE_WIDTH_PERCENT,
+		SETTING_OUTLINE_PINNED,
+		SETTING_OUTLINE_MAKE_ROOM,
 	]);
 	// Coerce defensively — a seeded/edited settings.json could carry an unexpected value.
 	const side: Side = values[SETTING_SIDE] === 'right' ? 'right' : 'left';
@@ -167,7 +261,30 @@ async function readSettings(): Promise<RidgelineSettings> {
 	const showMinimap = values[SETTING_SHOW_MINIMAP] !== false;
 	// W3: default true; only an explicit stored `false` keeps the strip on a heading-less note.
 	const hideWhenEmpty = values[SETTING_HIDE_WHEN_EMPTY] !== false;
-	return { side, editorMode, viewerMode, maxDepth, showMinimap, hideWhenEmpty };
+	// Issue #2 — the outline toolbar group. The two booleans that default to FALSE are read as "only an
+	// explicit stored `true` turns them on", the mirror of the two above that default to true; a seeded
+	// settings.json carrying a string or a number therefore never silently enables the toolbar.
+	const outlineToolbar = values[SETTING_OUTLINE_TOOLBAR] === true;
+	const outlinePinned = values[SETTING_OUTLINE_PINNED] === true;
+	const outlineMakeRoom = values[SETTING_OUTLINE_MAKE_ROOM] !== false;
+	let outlineWidthPercent = Number(values[SETTING_OUTLINE_WIDTH_PERCENT]);
+	if (!Number.isFinite(outlineWidthPercent)) outlineWidthPercent = OUTLINE_WIDTH_DEFAULT;
+	outlineWidthPercent = Math.min(
+		OUTLINE_WIDTH_MAX,
+		Math.max(OUTLINE_WIDTH_MIN, Math.round(outlineWidthPercent)),
+	);
+	return {
+		side,
+		editorMode,
+		viewerMode,
+		maxDepth,
+		showMinimap,
+		hideWhenEmpty,
+		outlineToolbar,
+		outlineWidthPercent,
+		outlinePinned,
+		outlineMakeRoom,
+	};
 }
 
 // The getSettings answer both content scripts read: resolved settings + the shared design tokens.
@@ -229,6 +346,38 @@ async function handleJump(anchor: string, line: number | null): Promise<void> {
 	}
 }
 
+// A settings change made FROM a surface — the outline toolbar's Width / Headings / Pin controls.
+//
+// The ALLOWLIST is these three literal `in` checks and nothing else: a content script can only ever
+// write outlinePinned, outlineWidthPercent and maxDepth, whatever else it puts in the payload, because
+// no key from the message is ever used to address a setting. Each value is coerced here exactly as
+// readSettings coerces the stored one, so a bad payload cannot store a value the surfaces would then
+// have to defend against.
+//
+// The answer is a fresh SettingsResponse: the surface that sent the message applies it immediately, so
+// the click feels instant, while every OTHER surface and window picks the change up through the
+// existing onChange push / 700ms poll (setValue below fires onChange).
+async function handleSetSettings(values: SetSettingsMessage['values']): Promise<SettingsResponse> {
+	if (values && typeof values === 'object') {
+		if ('outlinePinned' in values) {
+			await joplin.settings.setValue(SETTING_OUTLINE_PINNED, values.outlinePinned === true);
+		}
+		if ('outlineWidthPercent' in values) {
+			let percent = Number(values.outlineWidthPercent);
+			if (!Number.isFinite(percent)) percent = OUTLINE_WIDTH_DEFAULT;
+			percent = Math.min(OUTLINE_WIDTH_MAX, Math.max(OUTLINE_WIDTH_MIN, Math.round(percent)));
+			await joplin.settings.setValue(SETTING_OUTLINE_WIDTH_PERCENT, percent);
+		}
+		if ('maxDepth' in values) {
+			let depth = Number(values.maxDepth);
+			if (!Number.isFinite(depth)) depth = 6;
+			depth = Math.min(6, Math.max(1, Math.round(depth)));
+			await joplin.settings.setValue(SETTING_MAX_DEPTH, depth);
+		}
+	}
+	return readSettingsResponse();
+}
+
 async function onContentScriptMessage(rawMessage: ContentScriptMessage): Promise<unknown> {
 	if (!rawMessage || typeof rawMessage !== 'object') return null;
 
@@ -238,6 +387,8 @@ async function onContentScriptMessage(rawMessage: ContentScriptMessage): Promise
 		case 'jump':
 			await handleJump(rawMessage.anchor, rawMessage.line);
 			return { ok: true };
+		case 'setSettings':
+			return handleSetSettings(rawMessage.values);
 		default:
 			return null;
 	}
@@ -339,9 +490,31 @@ joplin.plugins.register({
 				await joplin.settings.setValue(SETTING_HIDE_WHEN_EMPTY, current === false);
 			},
 		});
-		// One "Ridgeline" submenu under Tools holding all three toggles, instead of three top-level Tools
+		// Issue #2: flip the outline pin live, from the keyboard (Ctrl+Alt+P) or the Tools → Ridgeline
+		// submenu — the same setting the toolbar's Pin button writes, so a pin made either way survives a
+		// restart and shows in every window.
+		//
+		// Pinning while the toolbar is OFF also turns the toolbar on: the pin lives IN the toolbar row, so
+		// a pinned outline without one would be un-unpinnable by mouse (only this command could undo it).
+		// Unpinning never touches the toolbar setting — the user may well want to keep the toolbar.
+		await joplin.commands.register({
+			name: TOGGLE_PIN_COMMAND,
+			label: 'Ridgeline: Toggle outline pin',
+			execute: async () => {
+				const pinned = (await joplin.settings.value(SETTING_OUTLINE_PINNED)) === true;
+				if (pinned) {
+					await joplin.settings.setValue(SETTING_OUTLINE_PINNED, false);
+					return;
+				}
+				await joplin.settings.setValue(SETTING_OUTLINE_PINNED, true);
+				const toolbar = (await joplin.settings.value(SETTING_OUTLINE_TOOLBAR)) === true;
+				if (!toolbar) await joplin.settings.setValue(SETTING_OUTLINE_TOOLBAR, true);
+			},
+		});
+
+		// One "Ridgeline" submenu under Tools holding all four toggles, instead of four top-level Tools
 		// items. Created here, after the last commands.register, because the leaves are resolved through
-		// CommandService when the menu bar builds, so all three commands are registered first.
+		// CommandService when the menu bar builds, so all four commands are registered first.
 		//
 		// The entries render with their FULL command labels ("Ridgeline: Toggle minimap", …), so the menu
 		// reads Tools → Ridgeline → Ridgeline: Toggle minimap. A per-item `label` cannot shorten them,
@@ -363,6 +536,7 @@ joplin.plugins.register({
 				{ commandName: TOGGLE_SIDE_COMMAND, accelerator: 'Ctrl+Alt+R' },
 				{ commandName: TOGGLE_MINIMAP_COMMAND, accelerator: 'Ctrl+Alt+M' },
 				{ commandName: TOGGLE_HIDE_WHEN_EMPTY_COMMAND, accelerator: 'Ctrl+Alt+H' },
+				{ commandName: TOGGLE_PIN_COMMAND, accelerator: 'Ctrl+Alt+P' },
 			],
 			MenuItemLocation.Tools,
 		);

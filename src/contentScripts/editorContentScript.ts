@@ -28,17 +28,44 @@ import type {
 import {
 	EDITOR_APPLY_SETTINGS_COMMAND,
 	EDITOR_SCROLL_COMMAND,
+	OUTLINE_WIDTH_DEFAULT,
+	OUTLINE_WIDTH_MAX,
+	OUTLINE_WIDTH_MIN,
+	OUTLINE_WIDTH_PRESETS,
+	outlineMakeRoomOn,
+	outlinePinnedOn,
+	outlineToolbarOn,
 	type PaneMode,
 	type RidgelineSettings,
+	type SetSettingsMessage,
 	type SettingsResponse,
 	type Side,
 } from '../common';
 import { parseHeadings, type EditorHeading } from '../headings';
-import { barLengthFor, DESIGN_TOKENS, stripTotalWidth, type RidgelineTokens } from '../tokens';
+import {
+	barLengthFor,
+	DESIGN_TOKENS,
+	outlineRoomPx,
+	outlineWidthPx,
+	stripTotalWidth,
+	type RidgelineTokens,
+} from '../tokens';
 
 // How close to the top edge (px) a heading must be to still count as "at the top". A small tolerance
 // keeps the active heading stable across sub-pixel layout jitter.
 const TOP_EDGE_TOLERANCE_PX = 4;
+
+// Issue #2: the two heading-depth labels the outline toolbar shows. The short one is the Headings
+// button's own text ("H1" alone reads better than "H1–H1"); the long one labels each choice in its
+// popover and matches the wording of the "Maximum heading depth" setting's options, so the same range
+// is named the same way wherever the user meets it. Mirrored in viewer.js.
+function depthLabelShort(maxDepth: number): string {
+	return maxDepth <= 1 ? 'H1' : `H1–H${maxDepth}`;
+}
+
+function depthLabelLong(depth: number): string {
+	return depth <= 1 ? 'H1 only' : `H1–H${depth}`;
+}
 
 interface Rgb {
 	r: number;
@@ -82,15 +109,21 @@ function reserveTheme(
 	settings: RidgelineSettings,
 	tokens: RidgelineTokens,
 	visible: boolean,
+	roomPx: number,
 ): ReturnType<typeof EditorView.theme> {
 	// Z2/W3: a strip that is not actually shown reserves no margin — there is nothing to keep the text
 	// clear of. `visible` folds in both the master showMinimap toggle AND the W3 hide-when-empty rule
 	// (heading-less note + hideWhenEmpty), so an empty note in reserve mode reclaims the full width.
-	if (settings.editorMode !== 'reserve' || !visible) {
-		return EditorView.theme({});
-	}
-	const pad = `${stripTotalWidth(tokens) + tokens.edgeGapPx}px`;
+	if (!visible) return EditorView.theme({});
 	const prop = settings.side === 'right' ? 'paddingRight' : 'paddingLeft';
+	// Issue #2 — the OUTLINE ROOM. A pinned outline with "make room" on gets a margin of its own,
+	// sized to the outline (not to the bars), and it SUPERSEDES the thin minimap margin: the outline
+	// covers the bars anyway, so reserving for both would double-count. roomPx is already 0 when
+	// make-room is off, when nothing is pinned, or when the pane is too narrow to leave a usable text
+	// column beside the outline (outlineRoomPx) — and then the legacy margin below applies unchanged.
+	if (roomPx > 0) return EditorView.theme({ '.cm-content': { [prop]: `${roomPx}px` } });
+	if (settings.editorMode !== 'reserve') return EditorView.theme({});
+	const pad = `${stripTotalWidth(tokens) + tokens.edgeGapPx}px`;
 	return EditorView.theme({
 		'.cm-content': { [prop]: pad },
 	});
@@ -106,6 +139,24 @@ class EditorStrip {
 	private rows: HTMLElement[] = [];
 	private activeIndex = -1;
 	private expanded = false;
+	// Issue #2 — the outline toolbar (Width / Headings / Pin), the outline's first row. All of this is
+	// inert while the toolbar setting is off: toolbarOn() is false, no toolbar is rendered, and every
+	// guard below falls through to the pre-toolbar behaviour.
+	private toolbar: HTMLDivElement | null = null;
+	private popover: HTMLDivElement | null = null;
+	private popoverFor: 'width' | 'headings' | null = null;
+	private widthInput: HTMLInputElement | null = null;
+	// The last width/pin state written to the panel, so the per-frame reposition only touches the DOM
+	// when the resolved px (or the pinned state) actually changed.
+	private lastOutlineWidth = -1;
+	private lastOutlineWidthPinned = false;
+	// Whether the PINNED layout is currently applied, so unpinning is detected as a transition (a plain
+	// settings push while unpinned must never close an outline the pointer is holding open).
+	private pinnedApplied = false;
+	// The last pointer position seen by the document mousemove hit-test — used only when unpinning, to
+	// tell "the user clicked the toolbar's Pin button, pointer still on the outline" (leave it open, the
+	// hover rules take over) from "Ctrl+Alt+P from anywhere else" (close it at once).
+	private lastPointer: { x: number; y: number } | null = null;
 	private collapseTimer: number | null = null;
 	// Q2: hover-intent. The dwell timer is armed when the pointer enters the bar hit-zone with no
 	// button pressed, and fires (opening the panel) only after it has RESTED there hoverOpenDelayMs.
@@ -140,6 +191,10 @@ class EditorStrip {
 		private settings: RidgelineSettings,
 		private tokens: RidgelineTokens,
 		private readonly onJump: (heading: EditorHeading) => void,
+		// Issue #2: a toolbar control writing a setting back through the coordinator, and a "the pane
+		// geometry moved" ping so the closure can re-reserve the outline room outside the CM update cycle.
+		private readonly onSetSettings: (values: SetSettingsMessage['values']) => void,
+		private readonly onGeometry: () => void,
 	) {
 		this.ownerDoc = view.scrollDOM.ownerDocument;
 		this.ownerWin = this.ownerDoc.defaultView ?? window;
@@ -167,6 +222,9 @@ class EditorStrip {
 			this.reposition();
 			this.layoutBars();
 			this.scheduleUpdate();
+			// Issue #2: the outline room is a PERCENT of the pane, so a resize changes its px value. The
+			// closure re-reserves it outside the CodeMirror update cycle (reconfiguring dispatches).
+			this.onGeometry();
 		};
 		this.ownerWin.addEventListener('resize', this.onResize, { passive: true });
 
@@ -178,7 +236,12 @@ class EditorStrip {
 		this.ownerWin.addEventListener('scroll', this.onWinScroll, { passive: true, capture: true });
 		const RO = (this.ownerWin as unknown as { ResizeObserver?: new (cb: () => void) => { observe(el: Element): void; disconnect(): void } }).ResizeObserver;
 		if (typeof RO === 'function') {
-			const ro = new RO(() => this.reposition());
+			const ro = new RO(() => {
+				this.reposition();
+				// Issue #2: same reason as onResize — a split drag or a sidebar toggle changes the pane
+				// width, and with it the outline's width and the room reserved for it.
+				this.onGeometry();
+			});
 			ro.observe(this.view.dom);
 			this.resizeObserver = ro;
 		}
@@ -218,9 +281,29 @@ class EditorStrip {
 		this.ownerDoc.addEventListener('visibilitychange', this.onVisibility);
 
 		this.onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape' && this.expanded) this.collapse();
+			if (event.key !== 'Escape') return;
+			// Issue #2: Escape closes an open toolbar popover FIRST and stops there — inside the width
+			// field it must dismiss the popover, not the outline. A PINNED outline never closes on Escape.
+			if (this.closePopover()) return;
+			if (this.isPinned()) return;
+			if (this.expanded) this.collapse();
 		};
 		this.ownerWin.addEventListener('keydown', this.onKeyDown);
+
+		// Issue #2: a click anywhere else inside the outline (a row, the panel background) closes an open
+		// popover. Registered in the CAPTURE phase, because the rows stopPropagation on click.
+		this.panel.addEventListener(
+			'click',
+			(event: Event) => {
+				const target = event.target as HTMLElement | null;
+				if (target && target.closest('.ridgeline-toolbar, .ridgeline-tb-popover')) return;
+				this.closePopover();
+			},
+			true,
+		);
+
+		// Apply the pinned layout if we are mounting into an already-pinned setting.
+		this.syncPinned();
 	}
 
 	// Z3: the pointer left our interactive surface (into another pane, an iframe, or out of the window).
@@ -229,6 +312,44 @@ class EditorStrip {
 	private departZone(): void {
 		this.cancelOpen();
 		if (this.expanded) this.scheduleCollapse();
+	}
+
+	// Issue #2: is the pointer, as last seen, still over the bars or the open outline?
+	private pointerOnStrip(): boolean {
+		const p = this.lastPointer;
+		if (p === null) return false;
+		return (
+			this.pointInRect(p.x, p.y, this.barsWrap.getBoundingClientRect()) ||
+			this.pointInRect(p.x, p.y, this.panel.getBoundingClientRect())
+		);
+	}
+
+	// Issue #2: reconcile the PINNED layout with the current settings. Pinned, the outline is simply
+	// always open at the pane's full height: the hover-intent timer, the collapse grace, departZone,
+	// blur/visibility and Escape are all held off elsewhere, so nothing here has to fight them.
+	private syncPinned(): void {
+		const pinned = this.isPinned();
+		this.container.setAttribute('data-pinned', pinned ? 'true' : 'false');
+		if (pinned) {
+			this.cancelOpen();
+			this.cancelCollapse();
+			this.expanded = true;
+			this.panel.style.display = 'block';
+			this.container.setAttribute('data-expanded', 'true');
+			if (this.activeIndex >= 0 && this.rows[this.activeIndex]) {
+				this.rows[this.activeIndex].scrollIntoView({ block: 'nearest' });
+			}
+			this.pinnedApplied = true;
+			return;
+		}
+		// Not pinned. Only a pinned→unpinned TRANSITION does anything: every other settings push (a poll
+		// tick, a side flip) must leave an outline the pointer is holding open exactly as it is.
+		if (!this.pinnedApplied) return;
+		this.pinnedApplied = false;
+		// Unpinning hands the outline back to the hover rules. If the pointer is still on it — the user
+		// just clicked the toolbar's own Pin button — leave it open and let the grace close it when they
+		// leave; from anywhere else (Ctrl+Alt+P, the Tools menu, the settings screen) close it now.
+		if (!this.pointerOnStrip()) this.collapse();
 	}
 
 	private measureScrollbarWidth(): number {
@@ -288,6 +409,9 @@ class EditorStrip {
 		} else {
 			s.left = `${Math.round(rect.left)}px`;
 		}
+		// Issue #2: the outline's width is a share of the pane, so it is resolved here — on every
+		// reposition — rather than only at build time. A no-op unless the px actually changed.
+		this.applyOutlineWidth();
 	}
 
 	private applyBaseStyle(): void {
@@ -333,27 +457,93 @@ class EditorStrip {
 		this.stylePanelShell();
 	}
 
-	// The longest panel width we allow: a hard token cap, also limited to a fraction of the pane width.
+	// The longest panel width we allow BEFORE the toolbar exists: a hard token cap, also limited to a
+	// fraction of the pane width. Still the whole story whenever the toolbar is off.
 	private panelMaxWidthPx(): number {
 		const paneWidth = this.view.scrollDOM.clientWidth || 0;
 		const fractionCap = paneWidth > 0 ? Math.floor(paneWidth * this.tokens.panelMaxWidthFraction) : this.tokens.panelMaxWidth;
-		return Math.max(140, Math.min(this.tokens.panelMaxWidth, fractionCap));
+		return Math.max(this.tokens.outlineMinWidthPx, Math.min(this.tokens.panelMaxWidth, fractionCap));
+	}
+
+	// ── Issue #2: the three effective-state predicates, from the ONE resolver in common.ts ──
+	private toolbarOn(): boolean {
+		return outlineToolbarOn(this.settings);
+	}
+
+	private isPinned(): boolean {
+		return outlinePinnedOn(this.settings);
+	}
+
+	// The outline's resolved width in px for the CURRENT pane (recomputed, never cached across a
+	// resize): a percent of the pane, floored at outlineMinWidthPx and capped at nine tenths of it.
+	private outlineWidth(): number {
+		return outlineWidthPx(
+			this.view.scrollDOM.clientWidth || 0,
+			this.settings.outlineWidthPercent,
+			this.tokens,
+		);
+	}
+
+	// Size the panel, and publish the resolved px on the container as `data-outline-width` (which is
+	// reported in every state, pinned or not, so the surfaces and the E2E can read one number).
+	//
+	// Three sizings, and only the middle one is new:
+	//  - toolbar OFF        → exactly today's content-fit sizing, untouched (the regression contract).
+	//  - toolbar ON, hover  → still content-fit ("a hovered outline that does not need the width does
+	//                         not use it"): the percent only REPLACES the old cap as the max-width.
+	//  - PINNED             → an exactly-outlineWidthPx docked panel; the room made for it is that wide.
+	private applyOutlineWidth(force = false): void {
+		const width = this.outlineWidth();
+		const pinned = this.isPinned();
+		if (!force && width === this.lastOutlineWidth && pinned === this.lastOutlineWidthPinned) return;
+		this.lastOutlineWidth = width;
+		this.lastOutlineWidthPinned = pinned;
+		this.container.setAttribute('data-outline-width', String(width));
+		const p = this.panel.style;
+		if (!this.toolbarOn()) {
+			p.width = 'max-content';
+			p.minWidth = `${this.tokens.outlineMinWidthPx}px`;
+			p.maxWidth = `${this.panelMaxWidthPx()}px`;
+			return;
+		}
+		if (pinned) {
+			p.width = `${width}px`;
+			p.minWidth = `${width}px`;
+			p.maxWidth = `${width}px`;
+			return;
+		}
+		// A pane narrower than the minimum cannot honour the minimum (min-width would beat max-width and
+		// overflow the pane), so on such a pane the floor drops to the width itself — the same guard the
+		// pre-toolbar cap carried as its Math.max floor.
+		p.width = 'max-content';
+		p.minWidth = `${Math.min(width, this.tokens.outlineMinWidthPx)}px`;
+		p.maxWidth = `${width}px`;
 	}
 
 	private stylePanelShell(): void {
 		const p = this.panel.style;
 		p.position = 'absolute';
 		p.top = '0';
-		p.maxHeight = '100%';
 		p.overflowY = 'auto';
 		p.overflowX = 'hidden';
 		p.boxSizing = 'border-box';
 		p.padding = `${this.tokens.panelPaddingPx}px`;
-		// P3: size to the longest row (max-content) up to a (widened) cap; beyond the cap a row stays a
-		// single line and is trimmed with an ellipsis (see renderPanel), never wrapped.
-		p.width = 'max-content';
-		p.minWidth = '140px';
-		p.maxWidth = `${this.panelMaxWidthPx()}px`;
+		// Issue #2: the toolbar is a sticky, full-bleed first row, so the panel gives up its top padding
+		// while one is shown — otherwise the row would stick 8px below the panel's own top edge.
+		if (this.toolbarOn()) p.paddingTop = '0';
+		// PINNED: the outline is docked at the FULL height of the pane (the container already spans it),
+		// with the rows scrolling inside. Unpinned it is content-height, capped at the pane, as before.
+		if (this.isPinned()) {
+			p.height = '100%';
+			p.maxHeight = '100%';
+		} else {
+			p.height = '';
+			p.maxHeight = '100%';
+		}
+		// P3: size to the longest row (max-content) up to a cap; beyond the cap a row stays a single line
+		// and is trimmed with an ellipsis (see renderPanel), never wrapped. Forced, because the shell may
+		// be re-styled after a settings change that flipped the toolbar/pin state.
+		this.applyOutlineWidth(true);
 		p.background = this.colors.panelBg;
 		p.color = this.colors.panelFg;
 		p.border = `1px solid ${this.colors.panelBorder}`;
@@ -489,9 +679,27 @@ class EditorStrip {
 	}
 
 	private renderPanel(): void {
+		// A pinned outline is open WHILE the user types, and every doc edit re-renders these rows — so the
+		// panel's scroll position is carried across the rebuild, or a long outline would snap back to the
+		// top on every keystroke.
+		const scrollTop = this.panel.scrollTop;
 		this.panel.textContent = '';
 		this.rows = [];
+		// Issue #2: the panel's children are rebuilt from scratch (on every doc edit, too), so any open
+		// popover goes with them — "the panel closing closes the popover", and so does a re-render.
+		this.toolbar = null;
+		this.popover = null;
+		this.popoverFor = null;
+		this.widthInput = null;
 		this.stylePanelShell();
+
+		// Issue #2: the toolbar is the outline's FIRST row, and exists only while the setting is on. It
+		// is rebuilt here rather than patched, so it always reflects the CURRENT settings (percent, depth,
+		// pressed state) without a second update path.
+		if (this.toolbarOn()) {
+			this.toolbar = this.buildToolbar();
+			this.panel.appendChild(this.toolbar);
+		}
 
 		this.headings.forEach((heading, index) => {
 			const row = this.ownerDoc.createElement('div');
@@ -534,6 +742,306 @@ class EditorStrip {
 			this.panel.appendChild(row);
 			this.rows.push(row);
 		});
+
+		// Issue #2: a PINNED outline stays on a note with no headings (W3 would otherwise unmount the
+		// whole strip), so it needs something to say. One placeholder row, and the toolbar above it keeps
+		// the Pin button reachable — the user can always unpin in place.
+		if (this.headings.length === 0 && this.toolbarOn()) {
+			const empty = this.ownerDoc.createElement('div');
+			empty.className = 'ridgeline-panel-empty';
+			empty.setAttribute('data-testid', 'ridgeline-editor-empty');
+			empty.textContent = 'No headings';
+			const e = empty.style;
+			e.fontSize = `${this.tokens.panelFontPx}px`;
+			e.lineHeight = '1.4';
+			e.padding = `${this.tokens.panelRowPaddingPx}px 6px`;
+			e.paddingLeft = `${this.tokens.panelPaddingPx}px`;
+			e.color = this.colors.panelFg;
+			e.opacity = '0.7';
+			e.whiteSpace = 'nowrap';
+			e.cursor = 'default';
+			this.panel.appendChild(empty);
+		}
+
+		if (scrollTop > 0) this.panel.scrollTop = scrollTop;
+	}
+
+	// ── Issue #2: the outline toolbar ────────────────────────────────────
+	//
+	// Icons are inline SVG built here rather than a font: Font Awesome is Joplin chrome and is NOT
+	// guaranteed inside the rendered-note iframe, and the viewer half of this feature must draw the same
+	// three buttons. `currentColor` makes each icon inherit the button's colour, so the theme-derived
+	// panel palette carries them with no extra work.
+	private icon(paths: string[]): SVGSVGElement {
+		const NS = 'http://www.w3.org/2000/svg';
+		const svg = this.ownerDoc.createElementNS(NS, 'svg') as SVGSVGElement;
+		svg.setAttribute('viewBox', '0 0 24 24');
+		svg.setAttribute('width', '14');
+		svg.setAttribute('height', '14');
+		svg.setAttribute('fill', 'none');
+		svg.setAttribute('stroke', 'currentColor');
+		svg.setAttribute('stroke-width', '2');
+		svg.setAttribute('stroke-linecap', 'round');
+		svg.setAttribute('stroke-linejoin', 'round');
+		svg.setAttribute('aria-hidden', 'true');
+		svg.style.flex = '0 0 auto';
+		for (const d of paths) {
+			const path = this.ownerDoc.createElementNS(NS, 'path');
+			path.setAttribute('d', d);
+			svg.appendChild(path);
+		}
+		return svg;
+	}
+
+	// A toolbar/popover button: a real <button> (tabbable), transparent, 1px panelBorder, 3px radius,
+	// panelFg, pointer cursor, rowHover on hover. `pressed` is the aria-pressed state AND the visual
+	// one (rowHover background + the brighter current-bar colour), used by the pin and by the current
+	// preset/depth in a popover.
+	private toolbarButton(className: string, testId: string, title: string, pressed?: boolean): HTMLButtonElement {
+		const button = this.ownerDoc.createElement('button');
+		button.type = 'button';
+		button.className = className;
+		button.setAttribute('data-testid', testId);
+		button.title = title;
+		if (pressed !== undefined) button.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+		const b = button.style;
+		b.display = 'inline-flex';
+		b.alignItems = 'center';
+		b.gap = '4px';
+		b.padding = '1px 5px';
+		b.fontFamily = 'inherit';
+		b.fontSize = `${this.tokens.panelFontPx}px`;
+		b.lineHeight = '1.4';
+		b.background = pressed ? this.colors.rowHover : 'transparent';
+		b.border = `1px solid ${this.colors.panelBorder}`;
+		b.borderRadius = '3px';
+		b.color = pressed ? this.colors.currentBar : this.colors.panelFg;
+		b.cursor = 'pointer';
+		b.whiteSpace = 'nowrap';
+		button.addEventListener('mouseenter', () => {
+			button.style.background = this.colors.rowHover;
+		});
+		button.addEventListener('mouseleave', () => {
+			button.style.background = pressed ? this.colors.rowHover : 'transparent';
+		});
+		return button;
+	}
+
+	// Every toolbar/popover click is swallowed here: the toolbar sits INSIDE the panel, whose rows and
+	// bars jump on click, so a control must never let its click reach them.
+	private onToolbarClick(el: HTMLElement, handler: () => void): void {
+		el.addEventListener('click', (event: MouseEvent) => {
+			event.preventDefault();
+			event.stopPropagation();
+			handler();
+		});
+	}
+
+	private buildToolbar(): HTMLDivElement {
+		const bar = this.ownerDoc.createElement('div');
+		bar.className = 'ridgeline-toolbar';
+		bar.setAttribute('data-testid', 'ridgeline-editor-toolbar');
+		const s = bar.style;
+		// Sticky, so scrolling a long outline never scrolls the Pin button out of reach. Full-bleed via
+		// negative side margins (the panel keeps its side padding for the rows).
+		s.position = 'sticky';
+		s.top = '0';
+		s.zIndex = '2';
+		s.display = 'flex';
+		s.alignItems = 'center';
+		s.gap = '6px';
+		// Wrap rather than clip: a narrow outline (10% of the pane, floored at 140px) would otherwise push
+		// the Pin button out past the panel's overflow:hidden edge, where it could not be clicked.
+		s.flexWrap = 'wrap';
+		s.padding = '4px 6px';
+		s.margin = `0 ${-this.tokens.panelPaddingPx}px 4px ${-this.tokens.panelPaddingPx}px`;
+		s.background = this.colors.panelBg;
+		s.borderBottom = `1px solid ${this.colors.panelBorder}`;
+		s.fontSize = `${this.tokens.panelFontPx}px`;
+		// The rows' pointer cursor must not leak into the toolbar's background: only the buttons click.
+		s.cursor = 'default';
+
+		// WIDTH — a horizontal double arrow + the current percent.
+		const width = this.toolbarButton('ridgeline-tb-width', 'ridgeline-editor-tb-width', 'Outline width');
+		width.appendChild(this.icon(['M18 8l4 4-4 4', 'M6 8l-4 4 4 4', 'M2 12h20']));
+		width.appendChild(this.ownerDoc.createTextNode(`${this.settings.outlineWidthPercent}%`));
+		this.onToolbarClick(width, () => this.togglePopover('width'));
+		bar.appendChild(width);
+
+		// HEADINGS — an H + the current depth range.
+		const headings = this.toolbarButton('ridgeline-tb-headings', 'ridgeline-editor-tb-headings', 'Headings shown');
+		headings.appendChild(this.icon(['M6 4v16', 'M18 4v16', 'M6 12h12']));
+		headings.appendChild(this.ownerDoc.createTextNode(depthLabelShort(this.settings.maxDepth)));
+		this.onToolbarClick(headings, () => this.togglePopover('headings'));
+		bar.appendChild(headings);
+
+		// PIN — icon only; its pressed state is the pin itself.
+		const pinned = this.isPinned();
+		const pin = this.toolbarButton(
+			'ridgeline-tb-pin',
+			'ridgeline-editor-tb-pin',
+			pinned ? 'Unpin the outline' : 'Pin the outline open (Ctrl+Alt+P)',
+			pinned,
+		);
+		pin.appendChild(this.icon(['M9 2h6l-1 5 3 3v2H7v-2l3-3-1-5z', 'M12 12v10']));
+		this.onToolbarClick(pin, () => this.onSetSettings({ outlinePinned: !pinned }));
+		bar.appendChild(pin);
+
+		return bar;
+	}
+
+	// A popover lives INSIDE the panel, directly under the toolbar, so the panel's own bounding rect
+	// (which is what the hover hit-test uses) still contains the pointer while it is being used.
+	private popoverShell(kind: 'width' | 'headings'): HTMLDivElement {
+		const pop = this.ownerDoc.createElement('div');
+		pop.className = 'ridgeline-tb-popover';
+		pop.setAttribute('data-for', kind);
+		pop.setAttribute('data-testid', `ridgeline-editor-tb-popover-${kind}`);
+		const s = pop.style;
+		s.display = 'flex';
+		s.flexWrap = 'wrap';
+		s.alignItems = 'center';
+		s.gap = '4px';
+		s.padding = '4px 6px';
+		s.margin = `0 ${-this.tokens.panelPaddingPx}px 4px ${-this.tokens.panelPaddingPx}px`;
+		s.background = this.colors.panelBg;
+		s.borderBottom = `1px solid ${this.colors.panelBorder}`;
+		s.cursor = 'default';
+		return pop;
+	}
+
+	private buildWidthPopover(): HTMLDivElement {
+		const pop = this.popoverShell('width');
+		for (const preset of OUTLINE_WIDTH_PRESETS) {
+			const button = this.toolbarButton(
+				'ridgeline-tb-preset',
+				`ridgeline-editor-tb-preset-${preset}`,
+				`${preset}% of the pane`,
+				preset === this.settings.outlineWidthPercent,
+			);
+			button.setAttribute('data-preset', String(preset));
+			button.textContent = `${preset}%`;
+			this.onToolbarClick(button, () => {
+				this.closePopover();
+				if (preset !== this.settings.outlineWidthPercent) {
+					this.onSetSettings({ outlineWidthPercent: preset });
+				}
+			});
+			pop.appendChild(button);
+		}
+
+		// The free-form field: applies on Enter or on blur, clamped to 10–90; anything unparseable snaps
+		// back to the current value rather than writing a nonsense width.
+		const input = this.ownerDoc.createElement('input');
+		input.className = 'ridgeline-tb-width-input';
+		input.setAttribute('data-testid', 'ridgeline-editor-tb-width-input');
+		input.type = 'number';
+		input.min = String(OUTLINE_WIDTH_MIN);
+		input.max = String(OUTLINE_WIDTH_MAX);
+		input.step = '1';
+		input.value = String(this.settings.outlineWidthPercent);
+		input.title = `Any width from ${OUTLINE_WIDTH_MIN} to ${OUTLINE_WIDTH_MAX}%`;
+		const i = input.style;
+		i.width = '52px';
+		i.fontFamily = 'inherit';
+		i.fontSize = `${this.tokens.panelFontPx}px`;
+		i.padding = '1px 4px';
+		i.background = 'transparent';
+		i.color = this.colors.panelFg;
+		i.border = `1px solid ${this.colors.panelBorder}`;
+		i.borderRadius = '3px';
+		// The toolbar row is cursor:default and the panel is cursor:pointer; a text field must read as one.
+		i.cursor = 'text';
+		const applyInput = () => {
+			// A blur fired because the popover was removed has nothing to apply.
+			if (!input.isConnected) return;
+			const raw = input.value.trim();
+			const parsed = Number(raw);
+			if (raw === '' || !Number.isFinite(parsed)) {
+				input.value = String(this.settings.outlineWidthPercent);
+				return;
+			}
+			const next = Math.min(OUTLINE_WIDTH_MAX, Math.max(OUTLINE_WIDTH_MIN, Math.round(parsed)));
+			input.value = String(next);
+			this.closePopover();
+			if (next !== this.settings.outlineWidthPercent) this.onSetSettings({ outlineWidthPercent: next });
+		};
+		input.addEventListener('keydown', (event: KeyboardEvent) => {
+			// Kept away from the window-level Escape handler: inside the field, Escape dismisses the
+			// popover and leaves the outline exactly as it was.
+			event.stopPropagation();
+			if (event.key === 'Enter') {
+				event.preventDefault();
+				applyInput();
+			} else if (event.key === 'Escape') {
+				event.preventDefault();
+				this.closePopover();
+			}
+		});
+		input.addEventListener('blur', () => applyInput());
+		input.addEventListener('click', (event: MouseEvent) => event.stopPropagation());
+		pop.appendChild(input);
+		this.widthInput = input;
+
+		const percent = this.ownerDoc.createElement('span');
+		percent.textContent = '%';
+		percent.style.fontSize = `${this.tokens.panelFontPx}px`;
+		percent.style.color = this.colors.panelFg;
+		pop.appendChild(percent);
+		return pop;
+	}
+
+	private buildHeadingsPopover(): HTMLDivElement {
+		const pop = this.popoverShell('headings');
+		for (let depth = 1; depth <= 6; depth++) {
+			const button = this.toolbarButton(
+				'ridgeline-tb-depth',
+				`ridgeline-editor-tb-depth-${depth}`,
+				`Show headings down to H${depth}`,
+				depth === this.settings.maxDepth,
+			);
+			button.setAttribute('data-depth', String(depth));
+			button.textContent = depthLabelLong(depth);
+			this.onToolbarClick(button, () => {
+				this.closePopover();
+				if (depth !== this.settings.maxDepth) this.onSetSettings({ maxDepth: depth });
+			});
+			pop.appendChild(button);
+		}
+		return pop;
+	}
+
+	// Only one popover is ever open; clicking the button that owns the open one closes it again.
+	private togglePopover(kind: 'width' | 'headings'): void {
+		const wasOpen = this.popoverFor === kind;
+		this.closePopover();
+		if (wasOpen) return;
+		const pop = kind === 'width' ? this.buildWidthPopover() : this.buildHeadingsPopover();
+		this.popover = pop;
+		this.popoverFor = kind;
+		if (this.toolbar && this.toolbar.nextSibling) this.panel.insertBefore(pop, this.toolbar.nextSibling);
+		else this.panel.appendChild(pop);
+	}
+
+	// Returns whether a popover was actually closed, so Escape can stop at the popover.
+	private closePopover(): boolean {
+		if (!this.popover) {
+			this.popoverFor = null;
+			this.widthInput = null;
+			return false;
+		}
+		const pop = this.popover;
+		this.popover = null;
+		this.popoverFor = null;
+		this.widthInput = null;
+		if (pop.parentNode) pop.parentNode.removeChild(pop);
+		return true;
+	}
+
+	// The hover outline must not collapse out from under an open popover or a field being typed into.
+	private holdOpen(): boolean {
+		if (this.popover !== null) return true;
+		return this.widthInput !== null && this.ownerDoc.activeElement === this.widthInput;
 	}
 
 	private scheduleUpdate(): void {
@@ -622,6 +1130,14 @@ class EditorStrip {
 	// cancels the timer, so dragging a selection across the minimap neither opens the panel nor blocks
 	// the selection. Once open, staying over the bars/panel keeps it open (cancels the collapse grace).
 	private handlePointerMove(x: number, y: number, buttons: number): void {
+		// Recorded before any early return: the unpin transition reads it to decide whether the pointer
+		// is still on the outline (leave it open) or elsewhere (close it at once).
+		this.lastPointer = { x, y };
+		// Issue #2: a PINNED outline is not driven by hover at all — nothing to arm, nothing to collapse.
+		if (this.isPinned()) {
+			this.cancelCollapse();
+			return;
+		}
 		if (this.headings.length === 0) return;
 		const overBars = this.pointInRect(x, y, this.barsWrap.getBoundingClientRect());
 		const overPanel = this.expanded && this.pointInRect(x, y, this.panel.getBoundingClientRect());
@@ -673,6 +1189,9 @@ class EditorStrip {
 	}
 
 	private scheduleCollapse(): void {
+		// Issue #2: a pinned outline never collapses, and neither does one whose toolbar popover is open
+		// or whose width field is being typed into (the collapse grace is held until it is dismissed).
+		if (this.isPinned() || this.holdOpen()) return;
 		if (this.collapseTimer !== null) this.ownerWin.clearTimeout(this.collapseTimer);
 		this.collapseTimer = this.ownerWin.setTimeout(() => {
 			this.collapseTimer = null;
@@ -681,6 +1200,9 @@ class EditorStrip {
 	}
 
 	private collapse(): void {
+		// Same two holds as scheduleCollapse, so the direct callers (Escape, visibilitychange, the unpin
+		// transition) cannot close what must stay open either.
+		if (this.isPinned() || this.holdOpen()) return;
 		this.cancelOpen();
 		this.expanded = false;
 		this.panel.style.display = 'none';
@@ -694,6 +1216,9 @@ class EditorStrip {
 		this.colors = this.computeColors();
 		this.applyBaseStyle();
 		this.setHeadings(this.rawHeadings);
+		// Issue #2: last, because it wants the freshly rendered rows (to scroll the current one into view)
+		// and the freshly styled panel.
+		this.syncPinned();
 	}
 
 	public destroy(): void {
@@ -728,7 +1253,29 @@ function coerceSettings(raw: Partial<RidgelineSettings> | null | undefined): Rid
 	// W3: default true — only an explicit `false` keeps the strip (and reserve margin) on a note that
 	// has no headings.
 	const hideWhenEmpty = raw?.hideWhenEmpty !== false;
-	return { side, editorMode, viewerMode, maxDepth, showMinimap, hideWhenEmpty };
+	// Issue #2: the two booleans that default to FALSE take only an explicit `true` — the mirror of the
+	// two above — so a malformed response can never switch the toolbar on behind the user's back.
+	const outlineToolbar = raw?.outlineToolbar === true;
+	const outlinePinned = raw?.outlinePinned === true;
+	const outlineMakeRoom = raw?.outlineMakeRoom !== false;
+	let outlineWidthPercent = Number(raw?.outlineWidthPercent);
+	if (!Number.isFinite(outlineWidthPercent)) outlineWidthPercent = OUTLINE_WIDTH_DEFAULT;
+	outlineWidthPercent = Math.min(
+		OUTLINE_WIDTH_MAX,
+		Math.max(OUTLINE_WIDTH_MIN, Math.round(outlineWidthPercent)),
+	);
+	return {
+		side,
+		editorMode,
+		viewerMode,
+		maxDepth,
+		showMinimap,
+		hideWhenEmpty,
+		outlineToolbar,
+		outlineWidthPercent,
+		outlinePinned,
+		outlineMakeRoom,
+	};
 }
 
 export default (context: ContentScriptContext): MarkdownEditorContentScriptModule => ({
@@ -776,16 +1323,68 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		// off restores the pre-W3 behaviour (empty strip + reserve margin even with no headings).
 		const shouldShow = (): boolean => {
 			if (!currentSettings.showMinimap) return false;
+			// Issue #2: a PINNED outline stays even on a heading-less note — it shows its toolbar row and a
+			// "No headings" placeholder, so it can always be unpinned in place. Unpinned, hideWhenEmpty
+			// governs exactly as before (and showMinimap above still wins over everything).
+			if (outlinePinnedOn(currentSettings)) return true;
 			if (currentSettings.hideWhenEmpty && lastHeadings.length === 0) return false;
 			return true;
 		};
 
+		// Issue #2 — the OUTLINE ROOM in px for the pane as it is right now, or 0 when no room is to be
+		// made (make-room off, nothing pinned, nothing shown, or a pane too narrow to leave a usable text
+		// column). Recomputed rather than stored, because it is a percent of a pane that keeps moving.
+		const roomPxNow = (): number => {
+			if (!outlineMakeRoomOn(currentSettings) || !shouldShow()) return 0;
+			return outlineRoomPx(view.scrollDOM.clientWidth || 0, currentSettings.outlineWidthPercent, currentTokens);
+		};
+
+		// The room px currently baked into the compartment, so a resize only dispatches when the number
+		// actually changed (a ResizeObserver fires for every pixel of a split drag).
+		let appliedRoomPx = 0;
+		let roomSyncPending = false;
+
 		// Reconfigure the reserve-margin theme to match the current visibility. Dispatches a transaction,
 		// so it must NOT be called from inside a CodeMirror update (see the updateListener, which defers).
 		const reconfigureReserve = () => {
+			appliedRoomPx = roomPxNow();
 			view.dispatch({
-				effects: reserveCompartment.reconfigure(reserveTheme(currentSettings, currentTokens, shouldShow())),
+				effects: reserveCompartment.reconfigure(
+					reserveTheme(currentSettings, currentTokens, shouldShow(), appliedRoomPx),
+				),
 			});
+		};
+
+		// Issue #2: the pane moved (window resize, split drag, sidebar/note-list toggle), so the outline —
+		// a PERCENT of the pane — is a different number of pixels and the room reserved for it must
+		// follow. Two rules, both load-bearing: never dispatch from inside a CodeMirror update or a
+		// ResizeObserver callback (defer to a timeout, exactly as applyVisibility does), and never
+		// dispatch at all unless the computed px really changed.
+		const scheduleRoomSync = () => {
+			if (roomSyncPending || destroyed || !view.dom.isConnected) return;
+			if (roomPxNow() === appliedRoomPx) return;
+			roomSyncPending = true;
+			timerWin.setTimeout(() => {
+				roomSyncPending = false;
+				if (destroyed || !view.dom.isConnected) return;
+				if (roomPxNow() === appliedRoomPx) return;
+				reconfigureReserve();
+			}, 0);
+		};
+
+		// Issue #2: a toolbar control (Width preset/field, Headings depth, Pin) writing its value back
+		// through the coordinator, which allowlists and clamps it, stores it — firing the usual onChange
+		// push to every other surface — and answers with the fresh settings. Applying that answer here
+		// makes the click feel instant instead of waiting for the push to come back around.
+		const onSetSettings = (values: SetSettingsMessage['values']) => {
+			void (async () => {
+				try {
+					const response = (await context.postMessage({ type: 'setSettings', values })) as SettingsResponse | null;
+					if (response) applySettingsResponse(response, true);
+				} catch (error) {
+					console.warn('[ridgeline] setSettings failed', error);
+				}
+			})();
 		};
 
 		// The last visibility decision actually applied, so a doc edit only mounts/unmounts (and re-themes)
@@ -803,7 +1402,7 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 				if (strip) {
 					strip.applySettings(currentSettings, currentTokens);
 				} else {
-					strip = new EditorStrip(view, currentSettings, currentTokens, onJump);
+					strip = new EditorStrip(view, currentSettings, currentTokens, onJump, onSetSettings, scheduleRoomSync);
 				}
 				strip.setHeadings(lastHeadings);
 			} else if (strip) {
@@ -911,7 +1510,7 @@ export default (context: ContentScriptContext): MarkdownEditorContentScriptModul
 		})();
 
 		editorControl.addExtension([
-			reserveCompartment.of(reserveTheme(coerceSettings(null), DESIGN_TOKENS, shouldShow())),
+			reserveCompartment.of(reserveTheme(coerceSettings(null), DESIGN_TOKENS, shouldShow(), 0)),
 			updateListener,
 			lifecycle,
 		]);

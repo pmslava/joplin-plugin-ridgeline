@@ -50,6 +50,17 @@ export interface RidgelineTokens {
 	// How often (ms) the viewer strip polls the coordinator for changed settings (its live-update
 	// mechanism, since a MarkdownIt asset has no main→iframe push channel).
 	pollMs: number;
+	// ── Outline geometry (issue #2, the outline toolbar) ──────────────────
+	// The outline's width is a PERCENT of the pane (the outlineWidthPercent setting), clamped by these
+	// two: never narrower than outlineMinWidthPx, never wider than outlineMaxWidthFraction of the pane.
+	// outlineMinWidthPx is the promoted form of the panel's old hard-coded minWidth = '140px'.
+	outlineMinWidthPx: number;
+	outlineMaxWidthFraction: number;
+	// Room (the pinned outline's wide margin) is only made when at least this much text column would be
+	// left beside it; on a narrower pane the outline overlays instead, as it does on hover.
+	outlineMinTextPx: number;
+	// Air (px) between the text and the pinned outline's border, on top of the strip's edge gap.
+	outlineRoomGapPx: number;
 }
 
 export const DESIGN_TOKENS: RidgelineTokens = {
@@ -91,6 +102,10 @@ export const DESIGN_TOKENS: RidgelineTokens = {
 	// (tens of ms) never triggers it, short enough to feel responsive on a deliberate rest.
 	hoverOpenDelayMs: 300,
 	pollMs: 700,
+	outlineMinWidthPx: 140,
+	outlineMaxWidthFraction: 0.9,
+	outlineMinTextPx: 200,
+	outlineRoomGapPx: 6,
 };
 
 // The bar AREA width = the longest bar (H1). This is the width the bars themselves occupy.
@@ -108,6 +123,34 @@ export function stripWidth(tokens: RidgelineTokens): number {
 // mode keeps that air between the text and the strip.
 export function stripTotalWidth(tokens: RidgelineTokens): number {
 	return stripWidth(tokens) + 2 * tokens.barSideAirPx;
+}
+
+// The outline's width in px for a given pane width and percent setting — THE resolver, mirrored
+// verbatim in viewer.js. Recomputed on every reposition/resize/rebuild, because the pane width changes
+// under a split drag, a sidebar toggle or a window resize and the percent must follow it.
+//
+// clamp(round(pane * percent / 100), outlineMinWidthPx, floor(pane * outlineMaxWidthFraction)) — with
+// one guard in front: a pane NARROWER than the minimum cannot honour the minimum, so the outline is
+// simply the whole pane there (very narrow panes must not look surprising).
+export function outlineWidthPx(paneWidth: number, percent: number, tokens: RidgelineTokens): number {
+	const pane = Math.round(paneWidth);
+	if (!Number.isFinite(pane) || pane <= 0) return tokens.outlineMinWidthPx;
+	if (pane < tokens.outlineMinWidthPx) return pane;
+	const wanted = Math.round((pane * percent) / 100);
+	const cap = Math.floor(pane * tokens.outlineMaxWidthFraction);
+	return Math.max(tokens.outlineMinWidthPx, Math.min(wanted, cap));
+}
+
+// The outline ROOM in px: the outline's own width plus the strip's edge inset and a little air, so the
+// text stops short of the outline's border rather than touching it. 0 means "no room" — either
+// make-room is off or the pane is too narrow to leave outlineMinTextPx of text beside the outline, and
+// the legacy strip margin governs instead (i.e. exactly today's behaviour).
+export function outlineRoomPx(paneWidth: number, percent: number, tokens: RidgelineTokens): number {
+	const pane = Math.round(paneWidth);
+	if (!Number.isFinite(pane) || pane <= 0) return 0;
+	const room = outlineWidthPx(pane, percent, tokens) + tokens.edgeGapPx + tokens.outlineRoomGapPx;
+	if (pane - room < tokens.outlineMinTextPx) return 0;
+	return room;
 }
 
 // Bar length for a level, clamped to the deepest defined level.

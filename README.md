@@ -12,23 +12,24 @@ Ridgeline draws a compact stack of thin bars down the edge of your note — one 
 
 *Resting the pointer on the bars opens the full outline — rows indented by heading level, the current heading in bold.*
 
-![The strip in a split editor + viewer](docs/images/split-view.png)
+![The minimap in a split editor + viewer](docs/images/split-view.png)
 
-*In a split view the strip tracks the current section in both the editor and the rendered viewer at once.*
+*In a split view the minimap tracks the current section in both the editor and the rendered viewer at once.*
 
 ## Features
 
 - **Compact level-encoded minimap.** One thin bar per heading; the bar length encodes the heading level (H1 longest … H6 shortest), so the note's structure reads at a glance from a sliver of edge space.
 - **Live current-section tracking.** The bar for the section at the top of the viewport is brightened and thickened and follows your scrolling in real time.
-- **Hover-intent table of contents.** Let the pointer rest on the bars (a short dwell, so a mouse merely crossing the strip never pops it open) and the stack expands into a full clickable outline, indented by level, with the current heading highlighted. Click a bar or a row to jump.
+- **Hover-intent table of contents.** Let the pointer rest on the bars (a short dwell, so a mouse merely crossing the minimap never pops it open) and the stack expands into a full clickable outline, indented by level, with the current heading highlighted. Click a bar or a row to jump.
+- **A toolbar on the outline — and a pin.** Switch the outline toolbar on and the outline grows a first row of controls: how wide it is (25, 33 or 50 % of the pane, or any width you type), how deep its headings go, and a pin. **Pin it open.** A pinned outline stays at the full height of the pane — in the editor and the viewer, in every window, across a restart — and by default the note text moves aside to make room for it, so it never covers a word. `Ctrl+Alt+P` pins and unpins from anywhere.
 - **Headings read the way the note reads.** Rows show each heading as the rendered note shows it, not as raw Markdown: a note or web link reads as its link text — including a reference link such as `[the guide][guide]`, whose `[guide]:` definition may sit anywhere in the note — and inline code, emphasis, escapes and the common HTML entities are rendered rather than printed.
-- **Editor and viewer, in step.** The strip is drawn in both the raw Markdown editor and the rendered note viewer, down to the heading text itself — both panes show the identical string — and a jump from either pane moves both.
-- **Overlay or reserve.** Draw the strip over the text, or reserve a thin margin so it never overlaps a word — set independently for the editor and the viewer.
-- **Left or right, your call.** Park the strip on either edge of the pane.
-- **Theme-aware.** Colours are derived from the live editor surface, so the strip looks right on light, dark, and custom themes with no palette to configure.
+- **Editor and viewer, in step.** The minimap is drawn in both the raw Markdown editor and the rendered note viewer, down to the heading text itself — both panes show the identical string — and a jump from either pane moves both.
+- **Overlay or a thin margin.** Draw the minimap over the text, or keep a thin margin so the bars never overlap a word — set independently for the editor and the viewer.
+- **Left or right, your call.** Park the minimap on either edge of the pane.
+- **Theme-aware.** Colours are derived from the live editor surface, so the minimap looks right on light, dark, and custom themes with no palette to configure.
 - **Live settings and multi-window.** Every setting applies immediately, in every open window, without a reload.
-- **Stays out of the way.** Hide the whole strip with a keystroke, or let it disappear automatically on notes that have no headings so the text uses the full width.
-- **Navigation only — never in your output.** The strip is a way to move around a note, not part of it, so it is excluded from **Export → PDF**, **File → Print** and **Export → HTML**: an exported or printed note is the plain document, with no minimap in it. For the same reason it never draws inside the Rich Text editor, where the document you are looking at *is* the note itself.
+- **Stays out of the way.** Hide the whole minimap with a keystroke, or let it disappear automatically on notes that have no headings so the text uses the full width.
+- **Navigation only — never in your output.** The minimap is a way to move around a note, not part of it, so it is excluded from **Export → PDF**, **File → Print** and **Export → HTML**: an exported or printed note is the plain document, with no minimap in it. For the same reason it never draws inside the Rich Text editor, where the document you are looking at *is* the note itself.
 
 ## Install
 
@@ -42,14 +43,18 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Strip side** | Left | Which edge of the editor/viewer the strip sits on — Left or Right. |
-| **Editor strip mode** | Overlay | `Overlay` draws over the text; `Reserve margin` adds a thin margin so text is never covered. |
-| **Viewer strip mode** | Overlay | The same choice for the rendered viewer, set independently of the editor. |
+| **Strip side** | Left | Which edge of the editor/viewer the minimap sits on — Left or Right. |
+| **Editor minimap margin** | None | The thin margin for the minimap's bars in the Markdown editor: `None` lets the bars overlay the text, `Thin margin` keeps the text clear of them. It applies to the bars only, never to the outline — a pinned outline has its own, wider margin below. |
+| **Viewer minimap margin** | None | The same choice for the rendered viewer, set independently of the editor. |
 | **Maximum heading depth** | H1–H6 | The deepest heading level shown. Headings deeper than this are dropped from the minimap and the outline. |
-| **Show minimap** | On | Master switch for the strip in both panes. Toggle without disabling the plugin (see the command below). |
-| **Hide minimap when the note has no headings** | On | On a heading-less note, hide the strip and drop its reserved margin so the text uses the full width. |
+| **Show minimap** | On | Master switch for the minimap in both panes. Toggle without disabling the plugin (see the command below). |
+| **Hide minimap when the note has no headings** | On | On a heading-less note, hide the minimap and drop its reserved margin so the text uses the full width. (A pinned outline stays: it shows *No headings* so you can unpin it in place.) |
 | **Show the toolbar toggle button** | On | Show the `fa-stream` note-toolbar button that toggles the minimap. **Takes effect only after restarting Joplin** — the plugin API cannot remove a toolbar button once created. The **Tools → Ridgeline** menu entry and `Ctrl+Alt+M` keep working regardless. |
-| **Hover open delay (ms)** | 300 | How long the pointer must rest on the bars before the outline opens (100–1000 ms). Higher = a quick trip across the strip never opens it. |
+| **Hover open delay (ms)** | 300 | How long the pointer must rest on the bars before the outline opens (100–1000 ms). Higher = a quick trip across the minimap never opens it. |
+| **Show the outline toolbar** | Off | Adds a row of controls to the top of the outline (the table of contents that opens over the minimap): Width, Headings and Pin. Off by default, and then the outline behaves exactly as before. The three settings below depend on it and do nothing while it is off. |
+| **Outline width (% of the pane)** | 33 | The outline's width as a share of the pane. A pinned outline is exactly this wide; the outline that opens on hover stays as narrow as its headings allow and uses this only as its limit. The toolbar's Width control offers 25, 33 and 50 and a field for any value from 10 to 90. Never narrower than 140 px, never wider than nine tenths of the pane. Needs the outline toolbar. |
+| **Pin the outline open** | Off | Keep the outline open at the full height of the pane instead of opening it on hover — in the editor and the viewer, in every window — until it is unpinned. The toolbar's Pin button and `Ctrl+Alt+P` flip this same setting, so a pin survives a restart. Needs the outline toolbar. |
+| **Make room for the pinned outline** | On | While the outline is pinned, push the note text aside by the outline's width so the outline never covers a word (it keeps its border, so where the note ends stays visible). This is the outline's own, wide margin — separate from the thin minimap margins above. Off: the pinned outline overlays the text, as it does on hover. On a pane too narrow to leave 200 px of text beside it, no room is made. Needs the outline toolbar and a pinned outline. |
 
 ### Commands and shortcuts
 
@@ -58,8 +63,9 @@ All settings live under **Settings → Ridgeline**. Every one applies live, with
 | **Ridgeline: Toggle minimap** | `Ctrl+Alt+M` | A note-toolbar button (the `fa-stream` icon — a stack of staggered lines that reads as the minimap). |
 | **Ridgeline: Toggle strip side (left/right)** | `Ctrl+Alt+R` | — |
 | **Ridgeline: Toggle hide-when-empty** | `Ctrl+Alt+H` | — |
+| **Ridgeline: Toggle outline pin** | `Ctrl+Alt+P` | Also the Pin button in the outline toolbar. Pinning while the toolbar is off switches the toolbar on too, so the pin can always be undone with the mouse. |
 
-All three also sit together in the **Tools → Ridgeline** submenu, listed there under the same full
+All four also sit together in the **Tools → Ridgeline** submenu, listed there under the same full
 names as above (Joplin labels a plugin menu entry from its command, so the `Ridgeline:` prefix is
 repeated inside the submenu). Each flips the matching setting, so both panes update live.
 
