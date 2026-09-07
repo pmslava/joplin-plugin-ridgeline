@@ -79,7 +79,8 @@ const WIDTH_TOL_PX = 10;
 const PINNED_WIDTH_TOL_PX = 2;
 /** The pinned panel spans the pane exactly; allow a few px for rounding/scrollbars. */
 const HEIGHT_TOL_PX = 4;
-/** The thin minimap margin is ~18px; "no room reserved" is anything below that (cf. w3-hide-when-empty). */
+/** The thin minimap margin is 46px with the shipped tokens (bar area 20 + 2×12 air + 2 edge gap); "no room
+ * reserved" is anything well below that — Launch B runs in overlay mode, so the post-unpin padding is 0. */
 const NO_ROOM_PX = 14;
 /** A toolbar popover can be destroyed by a re-render racing the click that opened it — retry the click. */
 const POPOVER_OPEN_ATTEMPTS = 3;
@@ -89,7 +90,9 @@ const POPOVER_OPEN_TIMEOUT_MS = 2000;
 function expectedOutlineWidthPx(paneW: number, pct: number): number {
   if (paneW < OUTLINE_MIN_WIDTH_PX) return paneW;
   const raw = Math.round((paneW * pct) / 100);
-  return Math.min(Math.max(raw, OUTLINE_MIN_WIDTH_PX), Math.floor(paneW * OUTLINE_MAX_WIDTH_FRACTION));
+  // Same order as src/tokens.ts outlineWidthPx: the 140px floor wins over the 90% ceiling on a pane of
+  // 140–155px, where floor(pane × 0.9) < 140 — the contract's clamp(v, lo, hi), floor applied last.
+  return Math.max(OUTLINE_MIN_WIDTH_PX, Math.min(raw, Math.floor(paneW * OUTLINE_MAX_WIDTH_FRACTION)));
 }
 
 // ── Measurement helpers ──────────────────────────────────────────────────────────────────────────
