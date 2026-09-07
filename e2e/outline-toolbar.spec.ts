@@ -93,6 +93,13 @@ const POPOVER_OPEN_TIMEOUT_MS = 2000;
 /** Room = the MEASURED panel width + edgeGapPx (2) + outlineRoomGapPx (6). */
 const ROOM_GAP_PX = 8;
 const ROOM_TOL_PX = 4;
+/** `Ridgeline: Toggle outline pin`. */
+const TOGGLE_PIN_ACCELERATOR = 'Control+Alt+p';
+/**
+ * `Ridgeline: Toggle room for the pinned outline`. Kept as a constant because the key may have to move
+ * to Ctrl+Alt+U if Ctrl+Alt+O turns out to be taken in Joplin's default keymap — one edit here.
+ */
+const TOGGLE_ROOM_ACCELERATOR = 'Control+Alt+o';
 
 /** The outline width (px) the contract's resolver must produce for a pane of `paneW` px at `pct` %. */
 function expectedOutlineWidthPx(paneW: number, pct: number): number {
@@ -262,7 +269,13 @@ async function focusEditor(win: Page): Promise<void> {
 /** Fire the `Ridgeline: Toggle outline pin` command via its accelerator. */
 async function firePinToggle(win: Page): Promise<void> {
   await focusEditor(win);
-  await win.keyboard.press('Control+Alt+p');
+  await win.keyboard.press(TOGGLE_PIN_ACCELERATOR);
+}
+
+/** Fire the `Ridgeline: Toggle room for the pinned outline` command via its accelerator. */
+async function fireRoomToggle(win: Page): Promise<void> {
+  await focusEditor(win);
+  await win.keyboard.press(TOGGLE_ROOM_ACCELERATOR);
 }
 
 /** `data-pinned` on the editor minimap, or null when the minimap is not mounted at all. */
@@ -998,7 +1011,42 @@ test.describe('Outline toolbar ON (seeded), minimap on the right', () => {
     ).toBeGreaterThanOrEqual(OUTLINE_MIN_TEXT_PX);
   });
 
-  // Contract B(4c) — the pin is a SETTING, so it survives leaving the note and coming back. This also
+  // Contract B(4c) — `outlineMakeRoom` has no toolbar control, so its own command is the way a user
+  // flips it while the outline is pinned: the note text reclaims the space immediately, and flipping it
+  // back restores exactly the same room. Runs pinned, and leaves the room ON for the tests that follow.
+  test('B4c: Ctrl+Alt+O toggles the room while pinned', async () => {
+    const { win } = joplin;
+    await ensurePinned(win, frame, true);
+    // The room is on to start with (default) — B4b has just measured it.
+    await expectEditorRoom(win, 'right');
+
+    // Room OFF: the pinned outline overlays the text, so the legacy minimap margin applies — none at
+    // all here, since Launch B runs in overlay mode on both surfaces.
+    await fireRoomToggle(win);
+    await expect
+      .poll(() => editorContentPadding(win, 'right'), {
+        timeout: 5_000,
+        message: 'editor room released by the toggle (overlay mode → no margin)',
+      })
+      .toBeLessThan(NO_ROOM_PX);
+    await expect
+      .poll(() => viewerBodyMargin(frame, 'right'), {
+        timeout: 10_000,
+        message: 'viewer room released by the toggle (overlay mode → no margin)',
+      })
+      .toBeLessThan(NO_ROOM_PX);
+    // The outline itself is untouched: still pinned, still open, still the same width.
+    await expect(win.locator(EDITOR_STRIP)).toHaveAttribute('data-pinned', 'true');
+    await expect(win.locator(EDITOR_PANEL)).toBeVisible();
+
+    // Room ON again: the same measured width + the two gaps comes back on both surfaces, so the tests
+    // after this one see exactly the state B4b left.
+    await fireRoomToggle(win);
+    await expectEditorRoom(win, 'right');
+    await expectViewerRoom(frame, 'right');
+  });
+
+  // Contract B(4d) — the pin is a SETTING, so it survives leaving the note and coming back. This also
   // creates the heading-less note the placeholder test below needs.
   test('B4: the pin survives switching notes', async () => {
     const { win } = joplin;
