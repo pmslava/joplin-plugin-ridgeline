@@ -592,6 +592,11 @@
 		// Issue #2: the pinned state and the resolved outline width, published for the other half of the
 		// feature to read (and for the E2E to assert on) in every state, pinned or not.
 		el.setAttribute('data-pinned', pinned ? 'true' : 'false');
+		// This whole strip is REBUILT on every settings change (unlike the editor's, which is re-styled in
+		// place), so the expanded state must be written at build time too — a rebuilt-but-untouched strip
+		// would otherwise carry no data-expanded at all until the first expand()/collapse(), and a reader
+		// could not tell "closed" from "not yet touched". Pinned, it is open from the moment it is built.
+		el.setAttribute('data-expanded', pinned ? 'true' : 'false');
 		var s = el.style;
 		s.position = 'fixed';
 		// R1: anchor the stack to the TOP of the pane (small offset), not vertically centred.
@@ -1172,11 +1177,10 @@
 		document.body.appendChild(el);
 		applyReserveMargin();
 		updateActive();
-		// Issue #2: pinned, the panel is open from the moment it is built (display was set above), and the
-		// current row is brought into view exactly as an expand() would.
-		if (pinned) {
-			el.setAttribute('data-expanded', 'true');
-			if (activeIndex >= 0 && rows[activeIndex]) rows[activeIndex].scrollIntoView({ block: 'nearest' });
+		// Issue #2: pinned, the panel is open from the moment it is built (its display and data-expanded
+		// were set above), so the current row is brought into view exactly as an expand() would.
+		if (pinned && activeIndex >= 0 && rows[activeIndex]) {
+			rows[activeIndex].scrollIntoView({ block: 'nearest' });
 		}
 
 		strip = { el: el, scrollHandler: scrollHandler, resize: resizeHandler, pointermove: pointermove, docleave: docleave, pointerout: pointerout, winblur: winblur, visibility: visibility, keydown: keydown, collapseTimer: collapseTimer, openTimer: openTimer };

@@ -417,6 +417,12 @@ class EditorStrip {
 	private applyBaseStyle(): void {
 		this.container.setAttribute('data-side', this.settings.side);
 		this.container.setAttribute('data-mode', this.settings.editorMode);
+		// The two STATE attributes are written here as well as by expand/collapse/syncPinned, so a strip
+		// that has just been mounted already carries them: a reader must never have to tell "closed" from
+		// "not yet touched". They report the CURRENT state (not a fixed 'false'), so re-styling an open
+		// outline on a live settings push cannot momentarily lie about it.
+		this.container.setAttribute('data-expanded', this.expanded ? 'true' : 'false');
+		this.container.setAttribute('data-pinned', this.isPinned() ? 'true' : 'false');
 
 		const s = this.container.style;
 		// Q3: FIXED on the document body (not absolute inside .cm-editor) so no CodeMirror layer or CM
