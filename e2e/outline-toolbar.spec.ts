@@ -81,6 +81,9 @@ const PINNED_WIDTH_TOL_PX = 2;
 const HEIGHT_TOL_PX = 4;
 /** The thin minimap margin is ~18px; "no room reserved" is anything below that (cf. w3-hide-when-empty). */
 const NO_ROOM_PX = 14;
+/** A toolbar popover can be destroyed by a re-render racing the click that opened it — retry the click. */
+const POPOVER_OPEN_ATTEMPTS = 3;
+const POPOVER_OPEN_TIMEOUT_MS = 2000;
 
 /** The outline width (px) the contract's resolver must produce for a pane of `paneW` px at `pct` %. */
 function expectedOutlineWidthPx(paneW: number, pct: number): number {
@@ -241,24 +244,47 @@ async function ensurePinned(win: Page, frame: Frame, wanted: boolean): Promise<v
 
 // ── Toolbar helpers ──────────────────────────────────────────────────────────────────────────────
 
-/** Open (or reuse) the Width popover inside the editor's outline, keeping the outline open. */
-async function openWidthPopover(win: Page): Promise<Locator> {
-  const popover = win.locator(`${EDITOR_PANEL} ${WIDTH_POPOVER}`);
-  if ((await popover.count()) === 0 || !(await popover.first().isVisible().catch(() => false))) {
-    await win.locator(`${EDITOR_PANEL} ${tb('editor', 'width')}`).click();
+/**
+ * Open (or reuse) one of the toolbar's popovers inside the editor's outline, keeping the outline open.
+ *
+ * RETRIED, because a click can race a re-render: the panel is rebuilt whenever settings arrive (the
+ * local apply, the settings push that follows it, the other surface's ~700ms poll) or the document
+ * changes, and a rebuild landing a few ms after the click throws the just-opened popover away. Each
+ * attempt re-parks the pointer inside the panel first — a rebuild can also resize the panel out from
+ * under the pointer, and losing the hover would close the whole outline — then clicks and waits a short
+ * while for the popover. Only after POPOVER_OPEN_ATTEMPTS tries does it fall through to the ordinary
+ * assertion, so a genuine failure still reports as "popover never became visible".
+ */
+async function openToolbarPopover(win: Page, which: 'width' | 'headings'): Promise<Locator> {
+  const popover = win.locator(
+    `${EDITOR_PANEL} ${which === 'width' ? WIDTH_POPOVER : HEADINGS_POPOVER}`
+  );
+  const button = win.locator(`${EDITOR_PANEL} ${tb('editor', which)}`);
+  for (let attempt = 1; attempt <= POPOVER_OPEN_ATTEMPTS; attempt++) {
+    // Already open (or reopened by a rebuild): clicking again would TOGGLE it shut.
+    if (await popover.first().isVisible().catch(() => false)) break;
+    try {
+      await parkPointerInEditorPanel(win);
+      await button.click({ timeout: POPOVER_OPEN_TIMEOUT_MS });
+      await expect(popover).toBeVisible({ timeout: POPOVER_OPEN_TIMEOUT_MS });
+      break;
+    } catch {
+      // Swallowed: the click found a detached button, or the popover was re-rendered away. Try again;
+      // the assertion below reports the failure if every attempt loses the race.
+    }
   }
   await expect(popover).toBeVisible({ timeout: 10_000 });
   return popover;
 }
 
+/** Open (or reuse) the Width popover inside the editor's outline, keeping the outline open. */
+async function openWidthPopover(win: Page): Promise<Locator> {
+  return openToolbarPopover(win, 'width');
+}
+
 /** Open (or reuse) the Headings popover inside the editor's outline, keeping the outline open. */
 async function openHeadingsPopover(win: Page): Promise<Locator> {
-  const popover = win.locator(`${EDITOR_PANEL} ${HEADINGS_POPOVER}`);
-  if ((await popover.count()) === 0 || !(await popover.first().isVisible().catch(() => false))) {
-    await win.locator(`${EDITOR_PANEL} ${tb('editor', 'headings')}`).click();
-  }
-  await expect(popover).toBeVisible({ timeout: 10_000 });
-  return popover;
+  return openToolbarPopover(win, 'headings');
 }
 
 /**
