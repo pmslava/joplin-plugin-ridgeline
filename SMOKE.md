@@ -75,7 +75,8 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       read left-to-right as before. Their compact bars mirror too: an RTL heading's bar is flush with
       the **left** of the minimap, stepping in from the right as the level deepens. Add a very long
       Arabic heading — its row is trimmed with `…` on the **left** (its end), never its first words.
-      Flip the side with **Ctrl+Alt+R**: the directions stay exactly as they were.
+      Flip the side with **Ctrl+Alt+R**: the directions stay exactly as they were. Press **Ctrl+Alt+R**
+      again to set it back to the left.
 
 ## Viewer
 

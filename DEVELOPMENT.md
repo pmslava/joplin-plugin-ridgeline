@@ -172,8 +172,9 @@ touches your real Joplin profile.
     jumps to. Pure, dependency-free, and pinned by `npm run test:headings`. It also owns
     `textDirection()` (issue #4): the first-strong-letter rule that decides, per heading and from its
     display text, whether the outline row and its minimap bar read right-to-left — `viewer.js` carries a
-    hand-kept twin, pinned by the VIEWER DRIFT GUARD (both regex literals byte-identical, and the same
-    answer on every DIRECTION case).
+    hand-kept twin, pinned by the VIEWER DRIFT GUARD, which lifts that twin out of `viewer.js` and
+    evaluates it: both regexes must equal `inlineText.ts`'s (source and flags), and it must give the same
+    answer on every DIRECTION case.
   - `tokens.ts` — the single file of design tokens (bar lengths per level, thickness, gaps, hover-panel
     sizing, colour opacity, and the outline's geometry: its min width, its max fraction of the pane, the
     text column that must survive beside a pinned one, the air between the text and its border). Change
@@ -238,9 +239,9 @@ touches your real Joplin profile.
     it is deferred out of any CodeMirror update (and out of the ResizeObserver callback) with a
     `setTimeout 0`, and only when the computed px actually changed; the viewer sets `document.body`'s
     margin and recomputes it on `resize`. `viewer.js` is
-    a plain-JS asset copied verbatim, so it duplicates exactly two rules from the TypeScript side: the
+    a plain-JS asset copied verbatim, so it duplicates two rules from `inlineText.ts`: the
     whitespace normaliser `.replace(/\s+/g, ' ').trim()`, which must stay byte-identical to
-    `collapse()` in `inlineText.ts`, and `textDirection()` with its two regex literals. Its VIEWER DRIFT
+    `collapse()`, and `textDirection()` with its two regexes. Its VIEWER DRIFT
     GUARD lives in `scripts/test-headings.js`; the behavioural guards are the editor↔viewer row-array
     equality in `e2e/heading-links.spec.ts` and the direction parity in `e2e/rtl-outline.spec.ts`. Do **not**
     port the Markdown scanner into `viewer.js` — its input is post-render text, where a Markdown

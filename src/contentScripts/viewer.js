@@ -10,13 +10,14 @@
 // the getSettings response (settings.tokens), so tuning stays a one-file change in src/tokens.ts.
 // The FALLBACK_TOKENS below are only used if that round-trip fails.
 //
-// Exactly TWO rules are duplicated from the TypeScript side. The whitespace normaliser
+// Two rules from src/inlineText.ts are duplicated here. The whitespace normaliser
 // `.replace(/\s+/g, ' ').trim()` (see headingDisplayText below) must stay byte-identical to
-// `collapse()` in src/inlineText.ts or the two strips would label the same heading differently; and
-// textDirection() (issue #4, below) must keep the same two regex literals as its twin in
-// src/inlineText.ts or the two strips would lay the same heading out in opposite directions. Both are
-// pinned by `npm run test:headings` (VIEWER DRIFT GUARD), which reads this file as text, and
-// behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality and
+// `collapse()` there or the two strips would label the same heading differently; and textDirection()
+// (issue #4, below) must keep the same two regexes as its twin there or the two strips would lay the
+// same heading out in opposite directions. (Other TypeScript logic is mirrored too — the issue #2
+// resolvers from src/common.ts and src/tokens.ts among it — and says so where it lives.) Both
+// inlineText.ts rules are pinned by `npm run test:headings` (VIEWER DRIFT GUARD), which reads this
+// file, and behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality and
 // e2e/rtl-outline.spec.ts's editor↔viewer direction parity.
 //
 // The strip is a NAVIGATION tool: it belongs in the live rendered viewer, and nowhere else. Joplin
@@ -419,10 +420,12 @@
 	// Issue #4 — the direction a heading's DISPLAY text reads in. A hand-kept TWIN of textDirection() in
 	// src/inlineText.ts (read the rule and its limits there): the first LETTER decides, 'rtl' for a
 	// right-to-left script, else 'ltr'; digits, punctuation, marks and emoji never decide; no letter at
-	// all is 'ltr'. The two regex literals must stay BYTE-IDENTICAL to the TypeScript side's — the VIEWER
-	// DRIFT GUARD in scripts/test-headings.js reads them out of inlineText.ts and fails if this file does
-	// not carry them verbatim. Resolved here rather than left to the browser's `dir="auto"` because the
-	// bar has no text to inspect, and one rule is what keeps a row, its bar and the editor's twin agreed.
+	// all is 'ltr'. The two regexes must stay IDENTICAL to the TypeScript side's — the VIEWER DRIFT GUARD
+	// in scripts/test-headings.js lifts these three declarations out of this file, evaluates them, and
+	// fails unless both regexes equal inlineText.ts's (source and flags) and the function gives the same
+	// answer on every DIRECTION case. So keep each declaration on one line, tab-indented, exactly once.
+	// Resolved here rather than left to the browser's `dir="auto"` because the bar has no text to
+	// inspect, and one rule is what keeps a row, its bar and the editor's twin agreed.
 	var LETTER = /\p{L}/u;
 	var RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]|[\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
 	function textDirection(text) {

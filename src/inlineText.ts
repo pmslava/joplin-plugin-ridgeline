@@ -846,16 +846,25 @@ const LETTER = /\p{L}/u;
 const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]|[\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
 
 /**
- * The direction a heading's display text reads in: the FIRST-STRONG-CHARACTER rule, the same rule
- * `dir="auto"` applies (Unicode bidi rules P2/P3). The first LETTER decides — 'rtl' if it belongs to a
- * right-to-left script, 'ltr' otherwise — and everything before it is skipped.
+ * The direction a heading's display text reads in: the same FIRST-STRONG idea `dir="auto"` applies
+ * (Unicode bidi rules P2/P3), over LETTERS only. The first letter decides — 'rtl' if it belongs to a
+ * right-to-left script, 'ltr' otherwise — and everything before it is skipped. Digits, punctuation,
+ * symbols, emoji and combining marks never decide, so `1. פרק` is RTL and `Alpha عربي` is LTR (its first
+ * letter is Latin). Text with no letter at all — empty, digits only, punctuation or emoji only — is
+ * 'ltr', the document default.
  *
- * Its limits are the bidi algorithm's own: only letters are strong here. Digits, punctuation, symbols,
- * emoji and combining marks are weak or neutral and never decide, so `1. פרק` is RTL and `Alpha عربي`
- * is LTR (its first letter is Latin). Text with no letter at all — empty, digits only, punctuation or
- * emoji only — is 'ltr', the document default. (The bidi algorithm also counts a handful of non-letter
- * strong characters, the invisible direction marks among them; a heading does not lead with one, and
- * looking at letters only keeps the rule a single test.)
+ * On letters it IS the bidi rule. Measured over every `\p{L}` code point: each letter inside the ranges
+ * of RTL_LETTER has bidi class R or AL, and no R or AL letter lies outside them. Off letters it departs
+ * from `dir="auto"` in exactly three ways:
+ *   * it skips the few hundred strong-RTL NON-letters bidi would stop at — the Hebrew maqaf, geresh and
+ *     gershayim, the Arabic semicolon, question mark, full stop and five-pointed star (؛ ؟ ۔ ٭), the NKo
+ *     digits and the invisible Arabic letter mark;
+ *   * it skips the few thousand strong-LTR non-letters — spacing combining marks, Roman numerals,
+ *     circled letters and the like;
+ *   * it lets the 26 modifier letters that bidi calls NEUTRAL decide 'ltr' — U+02B9–U+02BA,
+ *     U+02C6–U+02CF, U+02EC, U+0374, U+2E2F, U+A67F, U+A717–U+A71F and U+A788.
+ * Each needs a heading that LEADS with such a character before any ordinary letter, so the difference
+ * is negligible in a heading; in exchange the rule is one letter test and one range test.
  *
  * Iterates by CODE POINT (`for…of`), so a supplementary-plane letter such as Adlam is tested whole, not
  * as two meaningless surrogate halves. Cost: the scan stops at the first letter, which in a real
