@@ -741,6 +741,8 @@ class EditorStrip {
 			bar.setAttribute('data-level', String(heading.level));
 			bar.setAttribute('data-line', String(heading.line));
 			bar.setAttribute('data-anchor', heading.slug);
+			// Issue #4: the direction the bar mirrors to (see the Q4 note below), published for the E2E.
+			bar.setAttribute('data-dir', heading.dir);
 			// heading.text is DISPLAY text now (issue #1): the heading as a reader sees it, not the raw
 			// Markdown. This attribute is also the E2E observability channel (e2e/helpers.ts reads it for
 			// the current heading), so it and the viewer bar's data-text are guaranteed comparable.
@@ -753,8 +755,23 @@ class EditorStrip {
 			const b = bar.style;
 			// Q4: absolute on an integer pitch, right-aligned via `right` (flush right edge, ragged left)
 			// so a longer/current bar extends leftward without moving its right edge or its neighbours.
+			//
+			// Issue #4: the bar is its outline row in miniature. Its RAGGED edge is the row's INDENTATION
+			// edge: a deeper LTR heading is indented further from the left, and its shorter bar's left end
+			// steps inward from the left just the same. An RTL row is indented from the RIGHT, so its bar
+			// mirrors — flush LEFT, ragged right — whichever pane edge the minimap sits on (the side
+			// setting moves the strip, never the reading direction). Direction comes from `heading.dir`,
+			// the ONE resolver shared with the row (src/inlineText.ts textDirection), never from the
+			// browser: a bar has no text for `dir="auto"` to inspect, and a row and its bar must not be
+			// able to disagree. Nothing else changes: the width is still the level length, the pitch and
+			// the current bar's centring (layoutBars) are untouched.
 			b.position = 'absolute';
-			b.right = `${this.tokens.barSideAirPx}px`;
+			if (heading.dir === 'rtl') {
+				b.left = `${this.tokens.barSideAirPx}px`;
+				b.right = '';
+			} else {
+				b.right = `${this.tokens.barSideAirPx}px`;
+			}
 			b.height = `${this.tokens.barHeight}px`;
 			b.width = `${barLengthFor(this.tokens, heading.level)}px`;
 			b.background = this.colors.normalBar;
@@ -802,6 +819,12 @@ class EditorStrip {
 			row.setAttribute('data-index', String(index));
 			row.setAttribute('data-level', String(heading.level));
 			row.setAttribute('data-testid', `ridgeline-editor-row-${index}`);
+			// Issue #4: each row reads in its OWN heading's direction, so Arabic/Persian/Hebrew and Latin
+			// headings mix freely in one outline. `dir` is resolved in JS by the one shared rule
+			// (textDirection over the display text) rather than left to `dir="auto"`, so this row, its bar
+			// and the viewer's twin can never disagree. `data-dir` is the E2E observability channel.
+			row.setAttribute('dir', heading.dir);
+			row.setAttribute('data-dir', heading.dir);
 			// The hover-TOC row: the user-visible half of the issue #1 fix, delivered without touching
 			// this line — parseHeadings now hands us the resolved display text.
 			row.textContent = heading.text;
@@ -809,8 +832,13 @@ class EditorStrip {
 			const r = row.style;
 			r.fontSize = `${this.tokens.panelFontPx}px`;
 			r.lineHeight = '1.4';
+			// The shorthand's 6px is now the inline-END padding; the level indent below sits on the
+			// inline START — the left of an LTR row, the right of an RTL one — and the text aligns to
+			// that same start, so an RTL heading is right-aligned, indented from the right, and its
+			// ellipsis trims the END of the text (its left), never its first words.
 			r.padding = `${this.tokens.panelRowPaddingPx}px 6px`;
-			r.paddingLeft = `${this.tokens.panelPaddingPx + (heading.level - 1) * this.tokens.panelIndentPx}px`;
+			r.paddingInlineStart = `${this.tokens.panelPaddingPx + (heading.level - 1) * this.tokens.panelIndentPx}px`;
+			r.textAlign = 'start';
 			r.color = this.colors.panelFg;
 			// P3: each row is a SINGLE line; a heading too long for the (widened) panel is trimmed with a
 			// CSS ellipsis rather than wrapping onto a second line.
@@ -851,7 +879,7 @@ class EditorStrip {
 			e.fontSize = `${this.tokens.panelFontPx}px`;
 			e.lineHeight = '1.4';
 			e.padding = `${this.tokens.panelRowPaddingPx}px 6px`;
-			e.paddingLeft = `${this.tokens.panelPaddingPx}px`;
+			e.paddingInlineStart = `${this.tokens.panelPaddingPx}px`;
 			e.color = this.colors.panelFg;
 			e.opacity = '0.7';
 			e.whiteSpace = 'nowrap';

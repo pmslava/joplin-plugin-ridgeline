@@ -10,11 +10,14 @@
 // the getSettings response (settings.tokens), so tuning stays a one-file change in src/tokens.ts.
 // The FALLBACK_TOKENS below are only used if that round-trip fails.
 //
-// Exactly ONE rule is duplicated from the TypeScript side: the whitespace normaliser
-// `.replace(/\s+/g, ' ').trim()` (see headingDisplayText below), which must stay byte-identical to
-// `collapse()` in src/inlineText.ts or the two strips would label the same heading differently. It is
+// Exactly TWO rules are duplicated from the TypeScript side. The whitespace normaliser
+// `.replace(/\s+/g, ' ').trim()` (see headingDisplayText below) must stay byte-identical to
+// `collapse()` in src/inlineText.ts or the two strips would label the same heading differently; and
+// textDirection() (issue #4, below) must keep the same two regex literals as its twin in
+// src/inlineText.ts or the two strips would lay the same heading out in opposite directions. Both are
 // pinned by `npm run test:headings` (VIEWER DRIFT GUARD), which reads this file as text, and
-// behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality.
+// behaviourally by e2e/heading-links.spec.ts's editor↔viewer row-array equality and
+// e2e/rtl-outline.spec.ts's editor↔viewer direction parity.
 //
 // The strip is a NAVIGATION tool: it belongs in the live rendered viewer, and nowhere else. Joplin
 // ships this asset well beyond that one document — Export → PDF, File → Print and Export → HTML each
@@ -411,6 +414,25 @@
 		} catch (e) {
 			return (h.textContent || '').replace(/\s+/g, ' ').trim();
 		}
+	}
+
+	// Issue #4 — the direction a heading's DISPLAY text reads in. A hand-kept TWIN of textDirection() in
+	// src/inlineText.ts (read the rule and its limits there): the first LETTER decides, 'rtl' for a
+	// right-to-left script, else 'ltr'; digits, punctuation, marks and emoji never decide; no letter at
+	// all is 'ltr'. The two regex literals must stay BYTE-IDENTICAL to the TypeScript side's — the VIEWER
+	// DRIFT GUARD in scripts/test-headings.js reads them out of inlineText.ts and fails if this file does
+	// not carry them verbatim. Resolved here rather than left to the browser's `dir="auto"` because the
+	// bar has no text to inspect, and one rule is what keeps a row, its bar and the editor's twin agreed.
+	var LETTER = /\p{L}/u;
+	var RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]|[\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
+	function textDirection(text) {
+		// Array.from splits by CODE POINT, so a supplementary-plane letter (Adlam) is tested whole.
+		var chars = Array.from(String(text || ''));
+		for (var i = 0; i < chars.length; i++) {
+			if (!LETTER.test(chars[i])) continue;
+			return RTL_LETTER.test(chars[i]) ? 'rtl' : 'ltr';
+		}
+		return 'ltr';
 	}
 
 	function headingElements() {
@@ -1145,6 +1167,8 @@
 			// before "unifying" this with the editor's Markdown scanner). `data-anchor` below keeps
 			// using h.id: the viewer must go on sending Joplin's OWN id, never our uslug.
 			var text = headingDisplayText(h);
+			// Issue #4: resolved from the same display text the row shows, by the twin of the editor's rule.
+			var dir = textDirection(text);
 
 			var bar = document.createElement('div');
 			bar.className = 'ridgeline-bar';
@@ -1152,12 +1176,19 @@
 			bar.setAttribute('data-level', String(level));
 			bar.setAttribute('data-anchor', h.id);
 			bar.setAttribute('data-text', text);
+			bar.setAttribute('data-dir', dir);
 			bar.setAttribute('data-testid', 'ridgeline-viewer-tick-' + index);
 			bar.title = text;
 			var b = bar.style;
 			// Q4: absolute on an integer pitch, right-aligned via `right` (flush right edge, ragged left).
+			//
+			// Issue #4: the bar is its outline row in miniature — its RAGGED edge is the row's INDENTATION
+			// edge. An LTR row is indented from the left and its bar's left end steps inward with depth;
+			// an RTL row is indented from the right, so its bar mirrors: flush LEFT, ragged right, on
+			// either pane side. Same `dir` as the row, from the one rule (see textDirection above).
 			b.position = 'absolute';
-			b.right = barSideAir() + 'px';
+			if (dir === 'rtl') { b.left = barSideAir() + 'px'; b.right = ''; }
+			else { b.right = barSideAir() + 'px'; }
 			// Inactive slot top (updateActive re-centres the current one). W2: offset by centerPad.
 			b.top = deviceSnap(index * pitch + centerPad) + 'px';
 			b.height = tokens.barHeight + 'px';
@@ -1178,12 +1209,19 @@
 			row.setAttribute('data-index', String(index));
 			row.setAttribute('data-level', String(level));
 			row.setAttribute('data-testid', 'ridgeline-viewer-row-' + index);
+			// Issue #4: each row reads in its OWN heading's direction (mixed notes are fine), resolved in JS
+			// by the shared rule rather than by `dir="auto"`; `data-dir` is the E2E observability channel.
+			row.setAttribute('dir', dir);
+			row.setAttribute('data-dir', dir);
 			row.textContent = text;
 			var r = row.style;
 			r.fontSize = tokens.panelFontPx + 'px';
 			r.lineHeight = '1.4';
+			// The shorthand's 6px is the inline-END padding; the level indent sits on the inline START (the
+			// right of an RTL row) and the text aligns to it, so the ellipsis trims the END of the text.
 			r.padding = tokens.panelRowPaddingPx + 'px 6px';
-			r.paddingLeft = (tokens.panelPaddingPx + (level - 1) * tokens.panelIndentPx) + 'px';
+			r.paddingInlineStart = (tokens.panelPaddingPx + (level - 1) * tokens.panelIndentPx) + 'px';
+			r.textAlign = 'start';
 			r.color = colors.panelFg;
 			// P3: each row is a SINGLE line; a heading too long for the (widened) panel is trimmed with a
 			// CSS ellipsis rather than wrapping onto a second line.
@@ -1222,7 +1260,7 @@
 			es.fontSize = tokens.panelFontPx + 'px';
 			es.lineHeight = '1.4';
 			es.padding = tokens.panelRowPaddingPx + 'px 6px';
-			es.paddingLeft = tokens.panelPaddingPx + 'px';
+			es.paddingInlineStart = tokens.panelPaddingPx + 'px';
 			es.color = colors.panelFg;
 			es.opacity = '0.7';
 			es.whiteSpace = 'nowrap';

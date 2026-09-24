@@ -34,7 +34,7 @@ export interface RidgelineTokens {
 	stripTopOffsetPx: number;
 	// Hover-expanded TOC panel.
 	panelFontPx: number; // row font size
-	panelIndentPx: number; // extra left indent per heading level
+	panelIndentPx: number; // extra indent per heading level, on the row's START side (the right of an RTL heading)
 	panelPaddingPx: number; // panel inner padding
 	panelRowPaddingPx: number; // per-row vertical padding
 	panelGapPx: number; // gap between the compact strip and the panel

@@ -30,6 +30,13 @@
 // E2E pins 3.7.6 and would never see it). None of them are needed — bracket and paren balance are
 // counters, not regexes.
 //
+// ONE deliberate exception, confined to `textDirection` at the bottom of this file: `\p{L}`. "Is this
+// code point a letter?" has no counter-shaped answer — the alternative is a hand-kept table of every
+// letter range in Unicode, which is exactly the kind of copy that drifts. Unicode property escapes
+// shipped in Chromium 64 (Electron 3, 2018); every Electron a 3.3+ desktop Joplin runs on is years
+// newer, and the manifest declares `platforms: ["desktop"]`. It is ONE short literal outside the scan,
+// and it is pinned byte-for-byte against its viewer.js twin by the VIEWER DRIFT GUARD.
+//
 // HOT PATH — `parseHeadings` runs from the CodeMirror updateListener on every `docChanged`, over every
 // heading. The scan is index-based (indexOf/character comparison/explicit depth counters); no regex
 // here has a nested or adjacent quantifier, and the survivors are short anchored probes at the cursor.
@@ -810,4 +817,54 @@ export function renderInline(
 	} catch (error) {
 		return { display: collapse(raw), slugSource: fallbackSlugSource(raw) };
 	}
+}
+
+// ── Heading direction (GitHub issue #4) ───────────────────────────────────────────────────────────
+//
+// Arabic, Persian and Hebrew headings must read right-to-left in the outline — aligned right, indented
+// from the right, trimmed at the correct end — and LTR and RTL headings may be MIXED in one note, so the
+// direction is resolved PER HEADING, from its DISPLAY text (what the row shows: `### [تست](:/…)` is
+// decided by `ت`, never by the `[`).
+//
+// It is resolved HERE, in JavaScript, rather than left to the browser's `dir="auto"`, on purpose. The
+// minimap bar has no text for the browser to inspect, yet it must mirror with its row; and the editor
+// and the viewer are two separate surfaces that must agree. One resolver, applied to both the row and
+// its bar on both surfaces (viewer.js carries a byte-pinned twin), is what guarantees that a row and
+// its bar — or the editor and the viewer — can never disagree about a heading's direction.
+
+/** A letter, in any script. Letters are the only STRONG characters this rule looks at. */
+const LETTER = /\p{L}/u;
+
+/**
+ * The right-to-left scripts: Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic and the Arabic
+ * extensions (U+0590–U+08FF); the Hebrew and Arabic presentation forms (U+FB1D–U+FDFF, U+FE70–U+FEFF);
+ * and the RTL supplementary-plane blocks (U+10800–U+10FFF — Phoenician, Kharoshthi, Hanifi Rohingya,
+ * Yezidi and their neighbours — and U+1E800–U+1EFFF — Mende Kikakui, Adlam and the Arabic mathematical
+ * alphabet). Written as escapes, never as raw characters: an RTL or zero-width byte in a regex literal
+ * reorders or vanishes in an editor and a diff.
+ */
+const RTL_LETTER = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]|[\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
+
+/**
+ * The direction a heading's display text reads in: the FIRST-STRONG-CHARACTER rule, the same rule
+ * `dir="auto"` applies (Unicode bidi rules P2/P3). The first LETTER decides — 'rtl' if it belongs to a
+ * right-to-left script, 'ltr' otherwise — and everything before it is skipped.
+ *
+ * Its limits are the bidi algorithm's own: only letters are strong here. Digits, punctuation, symbols,
+ * emoji and combining marks are weak or neutral and never decide, so `1. פרק` is RTL and `Alpha عربي`
+ * is LTR (its first letter is Latin). Text with no letter at all — empty, digits only, punctuation or
+ * emoji only — is 'ltr', the document default. (The bidi algorithm also counts a handful of non-letter
+ * strong characters, the invisible direction marks among them; a heading does not lead with one, and
+ * looking at letters only keeps the rule a single test.)
+ *
+ * Iterates by CODE POINT (`for…of`), so a supplementary-plane letter such as Adlam is tested whole, not
+ * as two meaningless surrogate halves. Cost: the scan stops at the first letter, which in a real
+ * heading is the first or second character.
+ */
+export function textDirection(text: string): 'ltr' | 'rtl' {
+	for (const ch of text) {
+		if (!LETTER.test(ch)) continue;
+		return RTL_LETTER.test(ch) ? 'rtl' : 'ltr';
+	}
+	return 'ltr';
 }

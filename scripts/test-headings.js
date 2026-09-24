@@ -16,6 +16,10 @@
 //
 // RULE FOR CONTRIBUTORS: a new heading construct gets a MATRIX row before it gets code.
 //
+// Every heading also carries the DIRECTION its display text reads in (issue #4). Every measured row
+// here is a Latin-script heading, so every expectation says `dir: 'ltr'` — which pins that no existing
+// heading silently flips — and the DIRECTION block pins the right-to-left side of the rule.
+//
 // It compiles `src/inlineText.ts` + `src/headings.ts` straight from source with the repo's own
 // TypeScript, so a stale `dist/` can never fool it (and `headings.ts` is bundled TWICE by webpack, so
 // a hand-run of one pass can ship two copies that disagree — this check sees neither). Output goes to
@@ -318,7 +322,7 @@ const MATRIX = [
 const FENCED_FAKE_HEADING = {
 	id: 'fenced-fake-heading',
 	body: '```\n# Not a heading\n```\n\n# Real [link](' + NOTE + ')',
-	expected: [{ level: 1, text: 'Real link', line: 4, slug: 'real-link' }],
+	expected: [{ level: 1, text: 'Real link', line: 4, slug: 'real-link', dir: 'ltr' }],
 };
 
 // Sets that MUST be parsed together, in order, as one body: they exercise the duplicate counter, which
@@ -330,9 +334,9 @@ const GROUPS = [
 		// uniqueSlug starts the suffix at 2 and the counter is shared across LEVELS; the third differs
 		// only in case, which uslug lowercases, so it still collides.
 		expected: [
-			{ level: 1, text: 'Same', line: 0, slug: 'same' },
-			{ level: 2, text: 'Same', line: 1, slug: 'same-2' },
-			{ level: 3, text: 'same', line: 2, slug: 'same-3' },
+			{ level: 1, text: 'Same', line: 0, slug: 'same', dir: 'ltr' },
+			{ level: 2, text: 'Same', line: 1, slug: 'same-2', dir: 'ltr' },
+			{ level: 3, text: 'same', line: 2, slug: 'same-3', dir: 'ltr' },
 		],
 	},
 	{
@@ -341,8 +345,8 @@ const GROUPS = [
 		// markdown-it-anchor numbers an EMPTY base too, producing the literal id "-2". This is also why
 		// viewer.js's old `|| h.id` fallback had to go: it drew a bar labelled "-2". was: ['a','b']
 		expected: [
-			{ level: 1, text: 'a', line: 0, slug: '' },
-			{ level: 1, text: 'b', line: 1, slug: '-2' },
+			{ level: 1, text: 'a', line: 0, slug: '', dir: 'ltr' },
+			{ level: 1, text: 'b', line: 1, slug: '-2', dir: 'ltr' },
 		],
 	},
 	{
@@ -353,8 +357,8 @@ const GROUPS = [
 		// a definition three lines further down is honoured. Measured — this is exactly what Joplin does,
 		// and it is the sharpest statement of what "a heading's label depends on a distant line" means.
 		expected: [
-			{ level: 1, text: 'ref', line: 0, slug: 'ref' },
-			{ level: 1, text: 'ref', line: 2, slug: 'ref-2' },
+			{ level: 1, text: 'ref', line: 0, slug: 'ref', dir: 'ltr' },
+			{ level: 1, text: 'ref', line: 2, slug: 'ref-2', dir: 'ltr' },
 		],
 	},
 	{
@@ -362,8 +366,8 @@ const GROUPS = [
 		body: '# See [t][ref]\n\n## Also [ref] here\n\n[ref]: https://e.example.com/r',
 		// One definition serves every heading in the note, in both directions.
 		expected: [
-			{ level: 1, text: 'See t', line: 0, slug: 'see-t' },
-			{ level: 2, text: 'Also ref here', line: 2, slug: 'also-ref-here' },
+			{ level: 1, text: 'See t', line: 0, slug: 'see-t', dir: 'ltr' },
+			{ level: 2, text: 'Also ref here', line: 2, slug: 'also-ref-here', dir: 'ltr' },
 		],
 	},
 	{
@@ -373,8 +377,8 @@ const GROUPS = [
 		// at all, yet its anchor moves because the heading above it now collides once its markup is
 		// resolved. Verified to be exactly what Joplin does. was: ['a-~~x~~', 'a-x']
 		expected: [
-			{ level: 1, text: 'A x', line: 0, slug: 'a-x' },
-			{ level: 1, text: 'A x', line: 1, slug: 'a-x-2' },
+			{ level: 1, text: 'A x', line: 0, slug: 'a-x', dir: 'ltr' },
+			{ level: 1, text: 'A x', line: 1, slug: 'a-x-2', dir: 'ltr' },
 		],
 	},
 ];
@@ -485,6 +489,48 @@ const PATHOLOGY = [
 ];
 
 // ---------------------------------------------------------------------------
+// DIRECTION — issue #4. `textDirection` decides whether a heading's outline row and minimap bar read
+// right-to-left, by the FIRST-STRONG-LETTER rule `dir="auto"` uses: the first letter decides, and
+// digits, punctuation, marks and emoji never do. Each input is chosen to break one plausible wrong
+// implementation — "first character decides", "any RTL character anywhere", "the whole U+0590–U+08FF
+// block is RTL" (it also holds Arabic-Indic DIGITS, marks and punctuation), "UTF-16 code units are
+// characters" (Adlam is a surrogate pair). The invisible or combining inputs are built from their code
+// points on purpose, so a reviewer can read what they are.
+// ---------------------------------------------------------------------------
+
+const cp = (...points) => String.fromCodePoint(...points);
+
+const DIRECTION_CASES = [
+	// Strong RTL scripts.
+	{ name: 'Arabic', text: 'مرحبا بالعالم', dir: 'rtl' },
+	{ name: 'Persian', text: 'مقدمه', dir: 'rtl' },
+	{ name: 'Hebrew', text: 'שלום עולם', dir: 'rtl' },
+	{ name: 'Syriac', text: cp(0x0710, 0x0712), dir: 'rtl' },
+	{ name: 'an Arabic presentation form (U+FEFB)', text: cp(0xfefb), dir: 'rtl' },
+	// Strong LTR scripts.
+	{ name: 'Latin', text: 'Introduction', dir: 'ltr' },
+	{ name: 'Cyrillic', text: 'Привет мир', dir: 'ltr' },
+	{ name: 'CJK', text: '目录と見出し', dir: 'ltr' },
+	// No letter at all: the document default.
+	{ name: 'empty string', text: '', dir: 'ltr' },
+	{ name: 'digits only', text: '2026', dir: 'ltr' },
+	{ name: 'punctuation and emoji only', text: '— 🚀 !? …', dir: 'ltr' },
+	// Arabic-Indic digits live INSIDE the Arabic block but are not letters: they must not decide.
+	{ name: 'Arabic-Indic digits only', text: cp(0x0661, 0x0662, 0x0663), dir: 'ltr' },
+	// Leading neutrals are skipped until the first letter.
+	{ name: 'leading digit then Hebrew', text: '1. תוכן', dir: 'rtl' },
+	{ name: 'leading bracket, digit and dash then Arabic', text: '(1) — عربي', dir: 'rtl' },
+	// The FIRST letter decides, not the majority and not "any RTL anywhere".
+	{ name: 'Latin letter then Arabic', text: 'Alpha عربي', dir: 'ltr' },
+	{ name: 'Arabic then Latin', text: 'عربي Alpha', dir: 'rtl' },
+	// A supplementary-plane RTL letter (ADLAM CAPITAL LETTER ALIF), one code point, two code units.
+	{ name: 'Adlam (supplementary plane)', text: cp(0x1e900) + ' x', dir: 'rtl' },
+	// Marks and punctuation from inside the RTL blocks are not letters either.
+	{ name: 'Arabic combining mark (fatha) before a Latin letter', text: cp(0x064e) + 'abc', dir: 'ltr' },
+	{ name: 'Arabic comma before a Latin letter', text: cp(0x060c) + ' abc', dir: 'ltr' },
+];
+
+// ---------------------------------------------------------------------------
 
 function compile() {
 	execFileSync(
@@ -524,7 +570,7 @@ function block(name) {
 function main() {
 	compile();
 	const { parseHeadings } = require(path.join(OUT, 'headings.js'));
-	const { renderInline, normalizeReference } = require(path.join(OUT, 'inlineText.js'));
+	const { renderInline, normalizeReference, textDirection } = require(path.join(OUT, 'inlineText.js'));
 
 	// --- 1. MATRIX ----------------------------------------------------------
 	const matrix = block('MATRIX');
@@ -534,7 +580,7 @@ function main() {
 		if (grouped.has(row.id)) continue;
 		matrix.check(row.id, () => {
 			assert.deepEqual(parseHeadings(row.raw), [
-				{ level: row.level, text: row.display, line: row.line, slug: row.anchor },
+				{ level: row.level, text: row.display, line: row.line, slug: row.anchor, dir: row.dir || 'ltr' },
 			]);
 		});
 	}
@@ -585,8 +631,8 @@ function main() {
 	});
 	structure.check('a setext heading records the TEXT line, not the underline', () => {
 		assert.deepEqual(parseHeadings('Alpha\n=====\n\nBravo\n-----'), [
-			{ level: 1, text: 'Alpha', line: 0, slug: 'alpha' },
-			{ level: 2, text: 'Bravo', line: 3, slug: 'bravo' },
+			{ level: 1, text: 'Alpha', line: 0, slug: 'alpha', dir: 'ltr' },
+			{ level: 2, text: 'Bravo', line: 3, slug: 'bravo', dir: 'ltr' },
 		]);
 	});
 	structure.check('a --- after a paragraph line is a thematic break, not a setext heading', () => {
@@ -612,11 +658,11 @@ function main() {
 	});
 	// The controls. Without them the guard above is satisfied by deleting the setext branch outright.
 	structure.check('a plain text line above === IS a setext heading', () => {
-		assert.deepEqual(parseHeadings('Text\n==='), [{ level: 1, text: 'Text', line: 0, slug: 'text' }]);
+		assert.deepEqual(parseHeadings('Text\n==='), [{ level: 1, text: 'Text', line: 0, slug: 'text', dir: 'ltr' }]);
 	});
 	structure.check('a definition, a blank line, then a setext heading still IS one', () => {
 		assert.deepEqual(parseHeadings('[ref]: https://example.com\n\nText\n==='), [
-			{ level: 1, text: 'Text', line: 2, slug: 'text' },
+			{ level: 1, text: 'Text', line: 2, slug: 'text', dir: 'ltr' },
 		]);
 	});
 	// The guard reads the scan's own verdict, so it must NOT fire on a line the scan rejected: an empty
@@ -624,7 +670,7 @@ function main() {
 	// renders <h1 id="httpsexamplecom">[]: https://example.com</h1>. Measured.
 	structure.check('an empty-label definition is paragraph text, and === still heads it', () => {
 		assert.deepEqual(parseHeadings('[]: https://example.com\n==='), [
-			{ level: 1, text: '[]: https://example.com', line: 0, slug: 'httpsexamplecom' },
+			{ level: 1, text: '[]: https://example.com', line: 0, slug: 'httpsexamplecom', dir: 'ltr' },
 		]);
 	});
 	structure.check('an empty heading produces no bar', () => {
@@ -669,12 +715,28 @@ function main() {
 		});
 	}
 
-	// --- 5. VIEWER DRIFT GUARD ---------------------------------------------
+	// --- 5. DIRECTION --------------------------------------------------------
+	// The rule itself, then the one place it is applied editor-side: `parseHeadings` resolves `dir` from
+	// the DISPLAY text, so a link heading is decided by its label and never by the `[` that opens it.
+	const direction = block('DIRECTION');
+	for (const c of DIRECTION_CASES) {
+		direction.check(`${c.name} → ${c.dir}`, () => {
+			assert.equal(textDirection(c.text), c.dir);
+		});
+	}
+	direction.check('parseHeadings: mixed directions, and a link heading is decided by its label', () => {
+		const parsed = parseHeadings('# مقدمه\n## Intro\n### [تست](:/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)');
+		assert.deepEqual(parsed.map((h) => h.text), ['مقدمه', 'Intro', 'تست']);
+		assert.deepEqual(parsed.map((h) => h.dir), ['rtl', 'ltr', 'rtl']);
+	});
+
+	// --- 6. VIEWER DRIFT GUARD ---------------------------------------------
 	// src/contentScripts/viewer.js is a MarkdownIt asset copied verbatim: it has no bundler pass and
-	// cannot import src/inlineText.ts. Exactly one rule is therefore duplicated across the two files —
-	// the whitespace normaliser. A SOURCE comparison would be meaningless (one side is a string
-	// scanner, the other a DOM walker), so this pins the one shared literal plus its behaviour; the
-	// row-array equality in e2e/heading-links.spec.ts is the behavioural half.
+	// cannot import src/inlineText.ts. Exactly two rules are therefore duplicated across the two files.
+	// The first is the whitespace normaliser. A SOURCE comparison of the two text resolvers would be
+	// meaningless (one side is a string scanner, the other a DOM walker), so this pins the one shared
+	// literal plus its behaviour; the row-array equality in e2e/heading-links.spec.ts is the behavioural
+	// half. The second is textDirection (issue #4) — see the last two checks below.
 	const drift = block('VIEWER DRIFT GUARD');
 	const VIEWER = path.join(REPO_ROOT, 'src', 'contentScripts', 'viewer.js');
 	const NORMALISER = ".replace(/\\s+/g, ' ').trim()";
@@ -706,6 +768,49 @@ function main() {
 	});
 	drift.check('collapse() is that same rule', () => {
 		assert.equal(renderInline('  a   b  ').display, 'a b');
+	});
+	// textDirection, unlike the text resolver, is a pure function on BOTH sides, so both halves of the
+	// guard are possible here. The SOURCE half: the two regex literals are read out of src/inlineText.ts
+	// at test time (never restated here, so there is no third copy to drift) and must appear in
+	// viewer.js as the declarations of its twin — `var NAME = <literal>;`, which prose cannot satisfy.
+	const INLINE_TEXT = path.join(REPO_ROOT, 'src', 'inlineText.ts');
+	drift.check('viewer.js textDirection carries both regex literals byte-identical to inlineText.ts', () => {
+		const tsSource = fs.readFileSync(INLINE_TEXT, 'utf8');
+		const source = fs.readFileSync(VIEWER, 'utf8');
+		for (const name of ['LETTER', 'RTL_LETTER']) {
+			const declared = tsSource.match(new RegExp(`^const ${name} = (/.+/u);$`, 'm'));
+			assert.ok(
+				declared,
+				`src/inlineText.ts no longer declares \`const ${name} = /…/u;\` on one line, so this guard ` +
+					'cannot read the literal it pins. Keep the declaration on one line (or update this guard).',
+			);
+			const expected = `var ${name} = ${declared[1]};`;
+			assert.ok(
+				source.includes(expected),
+				`src/contentScripts/viewer.js does not declare ${expected} — its textDirection twin has ` +
+					'drifted from src/inlineText.ts, and the viewer would lay a heading out in a different ' +
+					'direction from the editor.',
+			);
+		}
+		assert.ok(
+			source.includes('function textDirection(') && source.includes('var dir = textDirection(text);'),
+			'src/contentScripts/viewer.js no longer defines textDirection() AND calls it on the display ' +
+				'text when building a row and its bar. A dead helper passes every literal check above.',
+		);
+	});
+	// The BEHAVIOUR half: lift the viewer's twin out of viewer.js — from its first regex declaration to
+	// the end of the function — evaluate it on its own, and run it over every DIRECTION case.
+	drift.check('viewer.js textDirection agrees with inlineText.ts on every DIRECTION case', () => {
+		const source = fs.readFileSync(VIEWER, 'utf8');
+		const start = source.indexOf('var LETTER = ');
+		const fn = source.indexOf('function textDirection(', start);
+		const end = source.indexOf('\n\t}\n', fn);
+		assert.ok(start >= 0 && fn > start && end > fn, 'could not lift textDirection out of viewer.js');
+		// eslint-disable-next-line no-new-func
+		const viewerTextDirection = new Function(`${source.slice(start, end + 3)}\nreturn textDirection;`)();
+		for (const c of DIRECTION_CASES) {
+			assert.equal(viewerTextDirection(c.text), textDirection(c.text), `viewer disagrees on "${c.name}"`);
+		}
 	});
 
 	// --- report -------------------------------------------------------------

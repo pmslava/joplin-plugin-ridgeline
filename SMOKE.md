@@ -68,6 +68,14 @@ in editor*), a **dark theme**, and **120% zoom**, strip on the **left**, unless 
       no relaunch. Set it back to 300.
 - [ ] **Click to jump.** Click a row in the expanded TOC (or click a bar) — the editor jumps to that
       heading. In split view the rendered note follows too.
+- [ ] **Right-to-left headings.** In a note mixing `# مقدمه`, `## نصب`, `# Introduction`,
+      `### 1. פרק` and `## Alpha عربي`, open the outline in the editor and in the viewer. The Arabic,
+      Persian and Hebrew rows (`1. פרק` included — a leading number does not decide) are aligned to the
+      **right** and indented from the right; `Introduction` and `Alpha عربي` (its first letter is Latin)
+      read left-to-right as before. Their compact bars mirror too: an RTL heading's bar is flush with
+      the **left** of the minimap, stepping in from the right as the level deepens. Add a very long
+      Arabic heading — its row is trimmed with `…` on the **left** (its end), never its first words.
+      Flip the side with **Ctrl+Alt+R**: the directions stay exactly as they were.
 
 ## Viewer
 

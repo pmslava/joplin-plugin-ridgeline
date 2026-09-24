@@ -26,7 +26,7 @@
 // included either way). See the header of src/inlineText.ts.
 
 import uslug from '@joplin/fork-uslug';
-import { normalizeReference, renderInline } from './inlineText';
+import { normalizeReference, renderInline, textDirection } from './inlineText';
 
 export interface EditorHeading {
 	level: number;
@@ -40,6 +40,12 @@ export interface EditorHeading {
 	line: number; // 0-based line number of the heading in the document
 	/** uslug of the token stream Joplin's markdown-it-anchor slugifies; equals the rendered id. */
 	slug: string;
+	/**
+	 * The direction `text` reads in (issue #4), by `textDirection`'s first-strong-letter rule over the
+	 * DISPLAY text — so `### [تست](:/…)` is decided by its label, not by the `[`. The outline row and
+	 * the minimap bar are both laid out from this one value, as the viewer's are from its twin.
+	 */
+	dir: 'ltr' | 'rtl';
 }
 
 /**
@@ -361,7 +367,15 @@ export function parseHeadings(body: string): EditorHeading[] {
 	// old single-pass version fed it.
 	for (const h of pending) {
 		const r = renderInline(h.raw, footnotes, references);
-		headings.push({ level: h.level, text: r.display, line: h.line, slug: slugFor(r.slugSource, seen) });
+		headings.push({
+			level: h.level,
+			text: r.display,
+			line: h.line,
+			slug: slugFor(r.slugSource, seen),
+			// From the resolved display text, never the raw line: the row shows `r.display`, so that is
+			// what a reader's eye — and the bidi rule — meets first.
+			dir: textDirection(r.display),
+		});
 	}
 
 	return headings;

@@ -42,7 +42,7 @@ build gate the publish flow depends on.
 
 `npm run test:headings` (`scripts/test-headings.js`) compiles `src/inlineText.ts` + `src/headings.ts`
 straight from source with the repo's own TypeScript — never from `dist/`, which can be stale, and into
-which `headings.ts` is bundled *twice* — and runs every measured case plus four supporting blocks.
+which `headings.ts` is bundled *twice* — and runs every measured case plus five supporting blocks.
 
 The contract it defends is this: for a given heading line, the strip must show **the text a reader
 sees** in the rendered note, and must compute an anchor **byte-identical to the id Joplin's renderer
@@ -60,7 +60,8 @@ string the E2E suite asserts on, proven to pass through byte-identical), STRUCTU
 comments, indent limits, setext guards — including the definition lines a block rule eats before the
 setext logic sees them — and line numbers), PATHOLOGY (adversarial inputs under a 50 ms
 budget, there to fail a future regex rewrite that reintroduces backtracking on the per-keystroke path),
-and VIEWER DRIFT GUARD.
+DIRECTION (the right-to-left rule of issue #4, and `parseHeadings` applying it to the display text), and
+VIEWER DRIFT GUARD.
 
 **A new heading construct gets a matrix row before it gets code.** If Joplin's live behaviour ever
 disagrees with a row, the live app wins: change the row and say why.
@@ -168,7 +169,11 @@ touches your real Joplin profile.
     cannot import TypeScript.
   - `inlineText.ts` — resolves a heading's inline Markdown into the text a reader sees plus the token
     stream Joplin slugifies; the single source for both the label the strip shows and the anchor it
-    jumps to. Pure, dependency-free, and pinned by `npm run test:headings`.
+    jumps to. Pure, dependency-free, and pinned by `npm run test:headings`. It also owns
+    `textDirection()` (issue #4): the first-strong-letter rule that decides, per heading and from its
+    display text, whether the outline row and its minimap bar read right-to-left — `viewer.js` carries a
+    hand-kept twin, pinned by the VIEWER DRIFT GUARD (both regex literals byte-identical, and the same
+    answer on every DIRECTION case).
   - `tokens.ts` — the single file of design tokens (bar lengths per level, thickness, gaps, hover-panel
     sizing, colour opacity, and the outline's geometry: its min width, its max fraction of the pane, the
     text column that must survive beside a pinned one, the air between the text and its border). Change
@@ -233,10 +238,11 @@ touches your real Joplin profile.
     it is deferred out of any CodeMirror update (and out of the ResizeObserver callback) with a
     `setTimeout 0`, and only when the computed px actually changed; the viewer sets `document.body`'s
     margin and recomputes it on `resize`. `viewer.js` is
-    a plain-JS asset copied verbatim, so it duplicates exactly one rule from the TypeScript side: the
+    a plain-JS asset copied verbatim, so it duplicates exactly two rules from the TypeScript side: the
     whitespace normaliser `.replace(/\s+/g, ' ').trim()`, which must stay byte-identical to
-    `collapse()` in `inlineText.ts`. Its VIEWER DRIFT GUARD lives in `scripts/test-headings.js`; the
-    behavioural guard is the editor↔viewer row-array equality in `e2e/heading-links.spec.ts`. Do **not**
+    `collapse()` in `inlineText.ts`, and `textDirection()` with its two regex literals. Its VIEWER DRIFT
+    GUARD lives in `scripts/test-headings.js`; the behavioural guards are the editor↔viewer row-array
+    equality in `e2e/heading-links.spec.ts` and the direction parity in `e2e/rtl-outline.spec.ts`. Do **not**
     port the Markdown scanner into `viewer.js` — its input is post-render text, where a Markdown
     stripper would eat literal characters the renderer deliberately shows (`` # Use `[x](y)` now ``
     renders as the literal `Use [x](y) now`). `viewer.js` also carries the **export/print guard**
@@ -259,7 +265,7 @@ touches your real Joplin profile.
     `stripAllowedHere()` combines both guards and is consulted on all three build paths. Pinned by
     `e2e/rich-text-editor.spec.ts`.
   - `manifest.json` — the plugin manifest (id, version, `app_min_version`, screenshots).
-- `e2e/` — the Playwright end-to-end specs (20 spec files), plus `launch.ts`/`helpers.ts` for driving
+- `e2e/` — the Playwright end-to-end specs (21 spec files), plus `launch.ts`/`helpers.ts` for driving
   Joplin, `guard.ts` (+ `global-setup.ts`/`global-teardown.ts`) for the resource discipline above, and
   `showcase.spec.ts` for the screenshots.
 - `scripts/setup-e2e.sh` — fetches and caches the Joplin AppImage the E2E suite runs against.
