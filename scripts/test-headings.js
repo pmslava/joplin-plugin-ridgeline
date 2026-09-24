@@ -490,11 +490,13 @@ const PATHOLOGY = [
 
 // ---------------------------------------------------------------------------
 // DIRECTION — issue #4. `textDirection` decides whether a heading's outline row and minimap bar read
-// right-to-left, by the FIRST-STRONG-LETTER rule `dir="auto"` uses: the first letter decides, and
+// right-to-left, by the first-strong idea `dir="auto"` uses, over letters: the first letter decides, and
 // digits, punctuation, marks and emoji never do. Each input is chosen to break one plausible wrong
 // implementation — "first character decides", "any RTL character anywhere", "the whole U+0590–U+08FF
 // block is RTL" (it also holds Arabic-Indic DIGITS, marks and punctuation), "UTF-16 code units are
-// characters" (Adlam is a surrogate pair). The invisible or combining inputs are built from their code
+// characters" (Adlam is a surrogate pair), and a range table narrowed by one block (every range of
+// RTL_LETTER has a letter here, which is also what lets the drift guard's behaviour half see a viewer
+// twin that dropped one). The invisible, combining and rarer-script inputs are built from their code
 // points on purpose, so a reviewer can read what they are.
 // ---------------------------------------------------------------------------
 
@@ -506,6 +508,12 @@ const DIRECTION_CASES = [
 	{ name: 'Persian', text: 'مقدمه', dir: 'rtl' },
 	{ name: 'Hebrew', text: 'שלום עולם', dir: 'rtl' },
 	{ name: 'Syriac', text: cp(0x0710, 0x0712), dir: 'rtl' },
+	// One letter from each of the less common blocks of U+0800–U+08FF and U+10800–U+10FFF, so a table
+	// that stops short of either range end fails here, not in a user's note.
+	{ name: 'Samaritan (U+0800)', text: cp(0x0800), dir: 'rtl' },
+	{ name: 'Mandaic (U+0840)', text: cp(0x0840), dir: 'rtl' },
+	{ name: 'Arabic Extended-B (U+0870)', text: cp(0x0870), dir: 'rtl' },
+	{ name: 'Hanifi Rohingya (U+10D00, supplementary plane)', text: cp(0x10d00), dir: 'rtl' },
 	{ name: 'an Arabic presentation form (U+FEFB)', text: cp(0xfefb), dir: 'rtl' },
 	// Strong LTR scripts.
 	{ name: 'Latin', text: 'Introduction', dir: 'ltr' },
@@ -717,7 +725,9 @@ function main() {
 
 	// --- 5. DIRECTION --------------------------------------------------------
 	// The rule itself, then the one place it is applied editor-side: `parseHeadings` resolves `dir` from
-	// the DISPLAY text, so a link heading is decided by its label and never by the `[` that opens it.
+	// the DISPLAY text, never the raw line. The link row alone cannot prove that — its `[` is neutral, so
+	// raw and display agree — hence the three rows after it, where the raw line's first letter is LATIN
+	// (the `b` of a tag, the `n` of an entity or a footnote label) and only the display text is Persian.
 	const direction = block('DIRECTION');
 	for (const c of DIRECTION_CASES) {
 		direction.check(`${c.name} → ${c.dir}`, () => {
@@ -729,10 +739,23 @@ function main() {
 		assert.deepEqual(parsed.map((h) => h.text), ['مقدمه', 'Intro', 'تست']);
 		assert.deepEqual(parsed.map((h) => h.dir), ['rtl', 'ltr', 'rtl']);
 	});
+	const DISPLAY_NOT_RAW = [
+		{ name: 'an inline HTML tag', body: '# <b>مقدمه</b>' },
+		{ name: 'an entity', body: '# &nbsp;مقدمه' },
+		{ name: 'a defined footnote marker', body: '# [^n] مقدمه\n\n[^n]: x' },
+	];
+	for (const c of DISPLAY_NOT_RAW) {
+		direction.check(`parseHeadings: display text decides, not the raw line — ${c.name}`, () => {
+			const parsed = parseHeadings(c.body);
+			assert.equal(parsed.length, 1, 'exactly one heading');
+			assert.equal(parsed[0].text, 'مقدمه', 'display text');
+			assert.equal(parsed[0].dir, 'rtl', 'dir follows the display text (the raw line would say ltr)');
+		});
+	}
 
 	// --- 6. VIEWER DRIFT GUARD ---------------------------------------------
 	// src/contentScripts/viewer.js is a MarkdownIt asset copied verbatim: it has no bundler pass and
-	// cannot import src/inlineText.ts. Exactly two rules are therefore duplicated across the two files.
+	// cannot import src/inlineText.ts. Two of that file's rules are therefore duplicated in viewer.js.
 	// The first is the whitespace normaliser. A SOURCE comparison of the two text resolvers would be
 	// meaningless (one side is a string scanner, the other a DOM walker), so this pins the one shared
 	// literal plus its behaviour; the row-array equality in e2e/heading-links.spec.ts is the behavioural
@@ -769,47 +792,76 @@ function main() {
 	drift.check('collapse() is that same rule', () => {
 		assert.equal(renderInline('  a   b  ').display, 'a b');
 	});
-	// textDirection, unlike the text resolver, is a pure function on BOTH sides, so both halves of the
-	// guard are possible here. The SOURCE half: the two regex literals are read out of src/inlineText.ts
-	// at test time (never restated here, so there is no third copy to drift) and must appear in
-	// viewer.js as the declarations of its twin — `var NAME = <literal>;`, which prose cannot satisfy.
+	// textDirection, unlike the text resolver, is a pure function on BOTH sides, so the viewer's twin
+	// can be pinned by its CODE, not by its text. A text search is not enough: a comment shaped like
+	// `// var RTL_LETTER = <the right literal>;` satisfies it while the real declaration drifts. So each
+	// of the twin's three declarations must appear EXACTLY ONCE as a top-level line of the IIFE (one
+	// tab, then `var` or `function` — a comment line starts with `//` and cannot match), neither regex
+	// may be assigned anywhere else in the file, and the slice from the first declaration to the end of
+	// the function is lifted out and EVALUATED: the regex objects it builds are compared, source and
+	// flags, with the literals read out of src/inlineText.ts at test time (never restated here, so
+	// there is no third copy to drift), and the function it builds is run over every DIRECTION case.
 	const INLINE_TEXT = path.join(REPO_ROOT, 'src', 'inlineText.ts');
-	drift.check('viewer.js textDirection carries both regex literals byte-identical to inlineText.ts', () => {
+	function tsRegex(tsSource, name) {
+		const declared = [...tsSource.matchAll(new RegExp(`^const ${name} = (/.+/u);$`, 'gm'))];
+		assert.equal(
+			declared.length,
+			1,
+			`src/inlineText.ts must declare \`const ${name} = /…/u;\` exactly once, on one line, so this ` +
+				`guard can read the literal it pins (found ${declared.length}).`,
+		);
+		// eslint-disable-next-line no-new-func
+		return new Function(`return ${declared[0][1]};`)();
+	}
+	function liftViewerTwin(source) {
+		const declarations = {
+			LETTER: /^\tvar LETTER = .+;$/gm,
+			RTL_LETTER: /^\tvar RTL_LETTER = .+;$/gm,
+			textDirection: /^\tfunction textDirection\(/gm,
+		};
+		for (const [name, pattern] of Object.entries(declarations)) {
+			const found = (source.match(pattern) || []).length;
+			assert.equal(found, 1, `viewer.js must declare ${name} exactly once as a top-level line (found ${found})`);
+		}
+		for (const [name, pattern] of [
+			['LETTER', /(^|[^\w])LETTER\s*=(?!=)/g],
+			['RTL_LETTER', /(^|[^\w])RTL_LETTER\s*=(?!=)/g],
+		]) {
+			const assigned = (source.match(pattern) || []).length;
+			assert.equal(assigned, 1, `viewer.js must assign ${name} exactly once, in its declaration (found ${assigned})`);
+		}
+		const start = source.search(/^\tvar LETTER = /m);
+		const fn = source.search(/^\tfunction textDirection\(/m);
+		const end = source.indexOf('\n\t}\n', fn);
+		assert.ok(start >= 0 && fn > start && end > fn, 'textDirection must follow its two regex declarations');
+		// eslint-disable-next-line no-new-func
+		return new Function(`${source.slice(start, end + 3)}\nreturn { LETTER, RTL_LETTER, textDirection };`)();
+	}
+	drift.check('viewer.js textDirection twin: declared once, both regexes equal to inlineText.ts, and called', () => {
 		const tsSource = fs.readFileSync(INLINE_TEXT, 'utf8');
 		const source = fs.readFileSync(VIEWER, 'utf8');
+		const twin = liftViewerTwin(source);
 		for (const name of ['LETTER', 'RTL_LETTER']) {
-			const declared = tsSource.match(new RegExp(`^const ${name} = (/.+/u);$`, 'm'));
-			assert.ok(
-				declared,
-				`src/inlineText.ts no longer declares \`const ${name} = /…/u;\` on one line, so this guard ` +
-					'cannot read the literal it pins. Keep the declaration on one line (or update this guard).',
+			const expected = tsRegex(tsSource, name);
+			assert.ok(twin[name] instanceof RegExp, `viewer.js ${name} is not a RegExp`);
+			assert.equal(
+				twin[name].source,
+				expected.source,
+				`viewer.js ${name} has drifted from src/inlineText.ts, and the viewer would lay a heading ` +
+					'out in a different direction from the editor.',
 			);
-			const expected = `var ${name} = ${declared[1]};`;
-			assert.ok(
-				source.includes(expected),
-				`src/contentScripts/viewer.js does not declare ${expected} — its textDirection twin has ` +
-					'drifted from src/inlineText.ts, and the viewer would lay a heading out in a different ' +
-					'direction from the editor.',
-			);
+			assert.equal(twin[name].flags, expected.flags, `viewer.js ${name} flags differ from src/inlineText.ts`);
 		}
 		assert.ok(
-			source.includes('function textDirection(') && source.includes('var dir = textDirection(text);'),
-			'src/contentScripts/viewer.js no longer defines textDirection() AND calls it on the display ' +
-				'text when building a row and its bar. A dead helper passes every literal check above.',
+			/^\t+var dir = textDirection\(text\);$/m.test(source),
+			'src/contentScripts/viewer.js no longer CALLS textDirection(text) on the display text when ' +
+				'building a row and its bar. A dead helper passes every check above.',
 		);
 	});
-	// The BEHAVIOUR half: lift the viewer's twin out of viewer.js — from its first regex declaration to
-	// the end of the function — evaluate it on its own, and run it over every DIRECTION case.
 	drift.check('viewer.js textDirection agrees with inlineText.ts on every DIRECTION case', () => {
-		const source = fs.readFileSync(VIEWER, 'utf8');
-		const start = source.indexOf('var LETTER = ');
-		const fn = source.indexOf('function textDirection(', start);
-		const end = source.indexOf('\n\t}\n', fn);
-		assert.ok(start >= 0 && fn > start && end > fn, 'could not lift textDirection out of viewer.js');
-		// eslint-disable-next-line no-new-func
-		const viewerTextDirection = new Function(`${source.slice(start, end + 3)}\nreturn textDirection;`)();
+		const twin = liftViewerTwin(fs.readFileSync(VIEWER, 'utf8'));
 		for (const c of DIRECTION_CASES) {
-			assert.equal(viewerTextDirection(c.text), textDirection(c.text), `viewer disagrees on "${c.name}"`);
+			assert.equal(twin.textDirection(c.text), textDirection(c.text), `viewer disagrees on "${c.name}"`);
 		}
 	});
 
