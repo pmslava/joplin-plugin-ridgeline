@@ -85,6 +85,10 @@ npm run dist
 
 For the end-to-end test suite, regenerating the showcase screenshots, and a tour of the repository layout, see [DEVELOPMENT.md](DEVELOPMENT.md). See [PUBLISHING.md](PUBLISHING.md) for the release flow.
 
+## Support
+
+If this plugin is useful to you, support the work: [GitHub Sponsors](https://github.com/sponsors/pmslava) for monthly or one-time sponsorship, or [Ko-fi](https://ko-fi.com/pmslava) for a one-off tip by PayPal or card without an account. All options: [pmslava.com/support](https://pmslava.com/support/).
+
 ## Credits
 
 Ridgeline's click-to-jump machinery — firing `scrollToHash` for the rendered viewer and an editor scroll command for the raw Markdown pane so a jump from either surface keeps both in step — follows the approach in [cqroot/joplin-outline](https://github.com/cqroot/joplin-outline) (MIT).

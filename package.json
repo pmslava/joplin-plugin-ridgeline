@@ -7,6 +7,10 @@
     "type": "git",
     "url": "git+https://github.com/pmslava/joplin-plugin-ridgeline.git"
   },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/pmslava"
+  },
   "publishConfig": {
     "access": "public"
   },
